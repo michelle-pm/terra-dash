@@ -1,0 +1,6 @@
+{
+  "name": "Terra Altaya Revenue Intelligence",
+  "description": "Интеллектуальная система управления доходами для курорта Terra Altaya Resort & Spa",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
