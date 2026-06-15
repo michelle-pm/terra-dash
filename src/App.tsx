@@ -15,6 +15,7 @@ import MappingScreen from './components/MappingScreen';
 import TariffsScreen from './components/TariffsScreen';
 import LogsScreen from './components/LogsScreen';
 import ExportScreen from './components/ExportScreen';
+import UsersScreen from './components/UsersScreen';
 
 import {
   Compass,
@@ -33,7 +34,8 @@ import {
   ChevronLeft,
   ChevronRight,
   Menu,
-  LayoutGrid
+  LayoutGrid,
+  Users
 } from 'lucide-react';
 import { ImportRun, CorrectionLog, CategoryMapping } from './types';
 
@@ -238,6 +240,7 @@ export default function App() {
         { id: 'import', name: 'Импорт Excel', icon: UploadCloud, badge: isAdmin ? undefined : 'Наблюдатель' },
         { id: 'mappings', name: 'Соответствия', icon: Layers, badge: unmappedCount > 0 ? unmappedCount : undefined, attention: unmappedCount > 0 },
         { id: 'tariffs', name: 'Тарифная сетка', icon: Settings },
+        { id: 'users', name: 'Управление ролями', icon: Users },
         { id: 'logs', name: 'Журнал коррекций', icon: History },
         { id: 'export', name: 'Выгрузки', icon: DownloadCloud },
       ]
@@ -463,6 +466,13 @@ export default function App() {
                   categoriesList={priceListCategories}
                   isAdmin={isAdmin}
                   onRefreshAll={refreshAllState}
+                  onShowSuccessToast={showToast}
+                />
+              )}
+
+              {activeTab === 'users' && (
+                <UsersScreen
+                  currentUserEmail={user.email}
                   onShowSuccessToast={showToast}
                 />
               )}

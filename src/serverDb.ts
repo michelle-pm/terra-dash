@@ -228,16 +228,39 @@ export function writeDatabase(db: LocalDatabase) {
 }
 
 // Robust helper functions for Excel date parsing
+export function cleanNumberStr(val: any): number {
+  if (val === undefined || val === null || val === '') return 0;
+  if (typeof val === 'number') {
+    return isNaN(val) ? 0 : val;
+  }
+  
+  const clean = val.toString()
+    .replace(/[\s\xa0]/g, '') // remove spaces and non-breaking spaces
+    .replace(/₽/g, '')        // remove Ruble icon
+    .replace(/руб\.?/g, '')   // remove rub, руб
+    .replace(',', '.')        // convert comma to dot
+    .trim();
+  
+  const parsed = parseFloat(clean);
+  return isNaN(parsed) ? 0 : parsed;
+}
+
 export function parseExcelDate(val: any): string | null {
   if (!val) return null;
   if (val instanceof Date) {
-    return val.toISOString().split('T')[0];
+    const y = val.getFullYear();
+    const m = (val.getMonth() + 1).toString().padStart(2, '0');
+    const d = val.getDate().toString().padStart(2, '0');
+    return `${y}-${m}-${d}`;
   }
   if (typeof val === 'number') {
-    // Excel base date is 1899-12-30. If serial number, translate to Date
-    const date = new Date((val - 25569) * 86400 * 1000);
+    // Excel base date is 1899-12-30. Use UTC values to prevent local offset shifts
+    const date = new Date(Math.round((val - 25569) * 86400 * 1000));
     if (!isNaN(date.getTime())) {
-      return date.toISOString().split('T')[0];
+      const y = date.getUTCFullYear();
+      const m = (date.getUTCMonth() + 1).toString().padStart(2, '0');
+      const d = date.getUTCDate().toString().padStart(2, '0');
+      return `${y}-${m}-${d}`;
     }
   }
   const str = val.toString().trim();
@@ -403,11 +426,11 @@ export function parseBnovoReport(filePath: string, fileName: string, uploadedBy:
 
   const row1 = rawRows[0];
   const row2 = rawRows[1];
+  const maxCols = Math.max(row1?.length || 0, row2?.length || 0);
 
   // Track categories in row 1
   let currentCategory = '';
   const colCategoryMap: { [colIndex: number]: string } = {};
-  const maxCols = row2.length;
 
   for (let c = 2; c < maxCols; c++) {
     const val = row1[c];
@@ -417,20 +440,56 @@ export function parseBnovoReport(filePath: string, fileName: string, uploadedBy:
     colCategoryMap[c] = currentCategory;
   }
 
+  // Find 'Всего за проживание' control column index
+  let controlColIndex = -1;
+  const searchTerms = ['всего за проживание', 'всего по категории', 'всего за проживание (сумма)', 'всего'];
+  
+  for (let term of searchTerms) {
+    for (let c = 2; c < maxCols; c++) {
+      const r1Val = row1[c] ? normalizeText(row1[c].toString()).toLowerCase().trim() : '';
+      const r2Val = row2[c] ? normalizeText(row2[c].toString()).toLowerCase().trim() : '';
+      if (r1Val === term || r2Val === term) {
+        controlColIndex = c;
+        break;
+      }
+    }
+    if (controlColIndex !== -1) break;
+  }
+
+  if (controlColIndex === -1) {
+    for (let term of searchTerms) {
+      for (let c = 2; c < maxCols; c++) {
+        const r1Val = row1[c] ? normalizeText(row1[c].toString()).toLowerCase().trim() : '';
+        const r2Val = row2[c] ? normalizeText(row2[c].toString()).toLowerCase().trim() : '';
+        if (r1Val.includes(term) || r2Val.includes(term)) {
+          controlColIndex = c;
+          break;
+        }
+      }
+      if (controlColIndex !== -1) break;
+    }
+  }
+
   // Track unit names in row 2
   const colUnitMap: { [colIndex: number]: string } = {};
   for (let c = 2; c < maxCols; c++) {
     const val = row2[c];
-    const cleanVal = val ? normalizeText(val.toString().trim()) : '';
+    if (val === undefined || val === null) continue;
+    const cleanVal = normalizeText(val.toString().trim());
     const valLower = cleanVal.toLowerCase();
+    
+    // Skip control total column, "0" technical column and non-unit names
     if (
+      c === controlColIndex ||
+      cleanVal === '0' ||
+      cleanVal === 'Всего за проживание' ||
+      valLower === '0' ||
+      valLower === 'всего за проживание' ||
       valLower.includes('итого') ||
       valLower.includes('всего') ||
       valLower.includes('сумма') ||
       valLower.includes('среднее') ||
       valLower.includes('разниц') ||
-      valLower.includes('всего за проживание') ||
-      valLower.includes('всего по категории') ||
       cleanVal === ''
     ) {
       continue;
@@ -452,14 +511,13 @@ export function parseBnovoReport(filePath: string, fileName: string, uploadedBy:
     if (!rData || rData.length === 0) continue;
 
     const dateVal = rData[0];
-    if (!dateVal) continue;
+    if (dateVal === undefined || dateVal === null || dateVal === '') continue;
 
     const labelStr = dateVal.toString().trim().toLowerCase();
-    if (labelStr.includes('итого') || labelStr.includes('всего') || labelStr.includes('сумма')) {
+    if (labelStr.includes('итого') || labelStr.includes('всего') || labelStr.includes('сумма') || labelStr.includes('среднее')) {
       const totalCell = rData[rData.length - 1];
       if (totalCell !== undefined && totalCell !== '') {
-        const cleanVal = totalCell.toString().replace(/[\s\xa0]/g, '').replace(',', '.');
-        expectedTotal = parseFloat(cleanVal) || 0;
+        expectedTotal = cleanNumberStr(totalCell);
       }
       continue;
     }
@@ -477,6 +535,9 @@ export function parseBnovoReport(filePath: string, fileName: string, uploadedBy:
 
     const weekdayStr = rData[1] ? rData[1].toString().trim() : '';
 
+    let rowCalculatedTotal = 0;
+    const rowControlTotal = controlColIndex !== -1 ? cleanNumberStr(rData[controlColIndex]) : 0;
+
     // Walk columns from index 2 to maxCols index (all physical units)
     for (let col = 2; col < maxCols; col++) {
       const uName = colUnitMap[col];
@@ -484,20 +545,10 @@ export function parseBnovoReport(filePath: string, fileName: string, uploadedBy:
       if (!uName) continue;
 
       const rawVal = rData[col];
-      
       const isEmptyCell = rawVal === '' || rawVal === null || rawVal === undefined || 
         (typeof rawVal === 'string' && (rawVal.trim() === '' || rawVal.trim() === '-' || rawVal.trim() === '–'));
 
-      let amount = 0;
-      if (!isEmptyCell) {
-        if (typeof rawVal === 'number') {
-          amount = rawVal;
-        } else {
-          const cleanVal = rawVal.toString().replace(/[\s\xa0]/g, '').replace(',', '.');
-          const parsed = parseFloat(cleanVal);
-          amount = isNaN(parsed) ? 0 : parsed;
-        }
-      }
+      const amount = cleanNumberStr(rawVal);
 
       parsedRevenue.push({
         date: isoDate,
@@ -509,7 +560,28 @@ export function parseBnovoReport(filePath: string, fileName: string, uploadedBy:
         isEmpty: isEmptyCell
       });
 
+      rowCalculatedTotal += amount;
       calculatedTotal += amount;
+    }
+
+    // Verify row reconciliation is strictly aligned with database input (limit 1 ruble)
+    const rowDiff = Math.abs(rowCalculatedTotal - rowControlTotal);
+    if (controlColIndex !== -1 && rowDiff > 1.0) {
+      throw new Error(`Ошибка сверки на дату ${isoDate}: сумма дозагрузки по комнатам (${rowCalculatedTotal.toFixed(2)} руб) отличается от Всего за проживание (${rowControlTotal.toFixed(2)} руб) на ${rowDiff.toFixed(2)} руб (лимит 1 рубль).`);
+    }
+  }
+
+  // Perform full dataset structural assertions to prevent contaminated or truncated imports
+  const uniqueDates = Array.from(new Set(parsedRevenue.map(p => p.date)));
+  const uniqueUnits = Array.from(new Set(parsedRevenue.map(p => p.unitName)));
+
+  // Perform structural validations if loading larger periods (expected full year of Altai)
+  if (uniqueDates.length > 100) {
+    if (uniqueUnits.length !== 50) {
+      throw new Error(`Сбой валидации структуры: отчет должен содержать ровно 50 уникальных номеров (найдено ${uniqueUnits.length}).`);
+    }
+    if (uniqueDates.length !== 365) {
+      throw new Error(`Сбой валидации структуры: отчет должен содержать ровно 365 отчетных дат (найдено ${uniqueDates.length}).`);
     }
   }
 
@@ -695,6 +767,7 @@ export interface DayMetricsCategory {
   actualRevenue: number;
   lostRevenue: number;
   vacantValue: number;
+  missingTariff?: boolean;
 }
 
 export interface DayMetrics {
@@ -708,6 +781,7 @@ export interface DayMetrics {
   freeUnits: number;
   vacantValue: number;
   categories: DayMetricsCategory[];
+  missingTariffCount?: number;
 }
 
 export function calculateMetricsForDay(
@@ -727,7 +801,8 @@ export function calculateMetricsForDay(
     activeUnits: 0,
     freeUnits: 0,
     vacantValue: 0,
-    categories: []
+    categories: [],
+    missingTariffCount: 0
   };
 
   // Filter revenue records for this date
@@ -761,11 +836,18 @@ export function calculateMetricsForDay(
     // Get price for this day and mapped category
     // Manual tariffs override standard parsed prices
     let dailyPrice = 0;
+    let missingTariff = false;
+    
     if (tariffs[mappedPriceCat] && tariffs[mappedPriceCat][date] !== undefined) {
       dailyPrice = tariffs[mappedPriceCat][date];
     } else {
       const priceRecord = priceList.find(p => p.category === mappedPriceCat && p.date === date);
-      dailyPrice = priceRecord ? priceRecord.price : 0;
+      if (priceRecord) {
+        dailyPrice = priceRecord.price;
+      } else {
+        dailyPrice = 0;
+        missingTariff = true;
+      }
     }
 
     const activeUnits = unitsOfCat.length;
@@ -787,7 +869,8 @@ export function calculateMetricsForDay(
       potentialRevenue: potentialRev,
       actualRevenue: actualRevSum,
       lostRevenue: lostRev,
-      vacantValue
+      vacantValue,
+      missingTariff
     });
 
     metrics.potentialRevenue += potentialRev;
@@ -797,6 +880,9 @@ export function calculateMetricsForDay(
     metrics.activeUnits += activeUnits;
     metrics.freeUnits += freeUnits;
     metrics.vacantValue += vacantValue;
+    if (missingTariff) {
+      metrics.missingTariffCount = (metrics.missingTariffCount || 0) + 1;
+    }
   });
 
   return metrics;
@@ -1010,49 +1096,18 @@ export function mergeRevenueData(
   sourceFile: string,
   user: string
 ): { inserted: number; updated: number } {
-  let inserted = 0;
-  let updated = 0;
+  // Fully delete and replace previous revenueData rows on confirmation
+  db.revenueData = [];
 
+  let inserted = 0;
   newData.forEach(newItem => {
     newItem.unitName = normalizeUnitName(newItem.unitName);
     newItem.sourceCategory = normalizeText(newItem.sourceCategory);
-
-    const existingIdx = db.revenueData.findIndex(
-      r => r.date === newItem.date && r.unitName === newItem.unitName
-    );
-
-    if (existingIdx !== -1) {
-      const existingItem = db.revenueData[existingIdx];
-      if (existingItem.actualRevenue !== newItem.actualRevenue || existingItem.isEmpty !== newItem.isEmpty) {
-        db.correctionLog.push({
-          id: 'corr_' + Math.random().toString(36).substring(2, 11),
-          date: newItem.date,
-          entityType: 'revenue',
-          entityId: newItem.unitName,
-          fieldName: 'actualRevenue',
-          oldValue: existingItem.actualRevenue,
-          newValue: newItem.actualRevenue,
-          sourceFile,
-          user,
-          changedAt: new Date().toISOString()
-        });
-        
-        db.revenueData[existingIdx] = {
-          ...existingItem,
-          actualRevenue: newItem.actualRevenue,
-          sourceCategory: newItem.sourceCategory,
-          isEmpty: newItem.isEmpty,
-          importId: newItem.importId
-        };
-        updated++;
-      }
-    } else {
-      db.revenueData.push(newItem);
-      inserted++;
-    }
+    db.revenueData.push(newItem);
+    inserted++;
   });
 
-  return { inserted, updated };
+  return { inserted, updated: 0 };
 }
 
 export function mergePriceData(
@@ -1061,47 +1116,17 @@ export function mergePriceData(
   sourceFile: string,
   user: string
 ): { inserted: number; updated: number } {
-  let inserted = 0;
-  let updated = 0;
+  // Fully delete and replace previous priceData rows on confirmation
+  db.priceData = [];
 
+  let inserted = 0;
   newData.forEach(newItem => {
     newItem.category = normalizeText(newItem.category);
-
-    const existingIdx = db.priceData.findIndex(
-      p => p.date === newItem.date && p.category === newItem.category
-    );
-
-    if (existingIdx !== -1) {
-      const existingItem = db.priceData[existingIdx];
-      if (existingItem.price !== newItem.price) {
-        db.correctionLog.push({
-          id: 'corr_' + Math.random().toString(36).substring(2, 11),
-          date: newItem.date,
-          entityType: 'price',
-          entityId: newItem.category,
-          fieldName: 'price',
-          oldValue: existingItem.price,
-          newValue: newItem.price,
-          sourceFile,
-          user,
-          changedAt: new Date().toISOString()
-        });
-        
-        db.priceData[existingIdx] = {
-          ...existingItem,
-          price: newItem.price,
-          originalCategory: newItem.originalCategory || existingItem.originalCategory,
-          importId: newItem.importId
-        };
-        updated++;
-      }
-    } else {
-      db.priceData.push(newItem);
-      inserted++;
-    }
+    db.priceData.push(newItem);
+    inserted++;
   });
 
-  return { inserted, updated };
+  return { inserted, updated: 0 };
 }
 
 export function parseBookingsReport(filePath: string, managerOverride?: string): any[] {

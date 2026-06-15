@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { auth } from '../firebase';
+import { auth, firebaseConfig } from '../firebase';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
 import { Eye, EyeOff, Settings, CheckCircle2, XCircle } from 'lucide-react';
 
@@ -11,13 +11,13 @@ export default function AuthScreen() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const actualApiKey = (import.meta as any).env.VITE_FIREBASE_API_KEY || "AIzaSyAnM4nfGgyglPyE9lac5QJa1y0PvQMj7uc";
+  const actualApiKey = firebaseConfig.apiKey;
   const hasApiKey = Boolean(actualApiKey);
   const apiKeyLength = actualApiKey?.length || 0;
   const apiKeyPrefix = actualApiKey ? actualApiKey.slice(0, 8) : '';
-  const projectId = (import.meta as any).env.VITE_FIREBASE_PROJECT_ID || 'terra-dashboard-acaab';
-  const authDomain = (import.meta as any).env.VITE_FIREBASE_AUTH_DOMAIN || 'terra-dashboard-acaab.firebaseapp.com';
-  const appIdExists = Boolean((import.meta as any).env.VITE_FIREBASE_APP_ID) || true;
+  const projectId = firebaseConfig.projectId;
+  const authDomain = firebaseConfig.authDomain;
+  const appIdExists = Boolean(firebaseConfig.appId);
 
   useEffect(() => {
     const diagnosticObj = {

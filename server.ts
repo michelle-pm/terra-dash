@@ -36,14 +36,38 @@ const hasFirebaseAdminConfig = !!(
   process.env.FIREBASE_PRIVATE_KEY
 );
 
+const rawPrivateKey = process.env.FIREBASE_PRIVATE_KEY || "";
+const hasBeginKey = rawPrivateKey.trim().startsWith("-----BEGIN PRIVATE KEY-----");
+const hasEndKey = rawPrivateKey.includes("-----END PRIVATE KEY-----");
+
 console.log("=== Проверка конфигурации Firebase Admin ===");
-console.log(`FIREBASE_PROJECT_ID: ${process.env.FIREBASE_PROJECT_ID ? 'ПРИСУТСТВУЕТ' : 'ОТСУТСТВУЕТ'}`);
-console.log(`FIREBASE_CLIENT_EMAIL: ${process.env.FIREBASE_CLIENT_EMAIL ? 'ПРИСУТСТВУЕТ' : 'ОТСУТСТВУЕТ'}`);
-console.log(`FIREBASE_PRIVATE_KEY: ${process.env.FIREBASE_PRIVATE_KEY ? 'ПРИСУТСТВУЕТ' : 'ОТСУТСТВУЕТ'}`);
+console.log(`hasProjectId: ${Boolean(process.env.FIREBASE_PROJECT_ID)}`);
+console.log(`projectId: ${process.env.FIREBASE_PROJECT_ID}`);
+console.log(`hasClientEmail: ${Boolean(process.env.FIREBASE_CLIENT_EMAIL)}`);
+console.log(`clientEmailDomain: ${process.env.FIREBASE_CLIENT_EMAIL ? process.env.FIREBASE_CLIENT_EMAIL.split('@')[1] : 'undefined'}`);
+console.log(`clientEmailProjectPart: ${process.env.FIREBASE_CLIENT_EMAIL ? process.env.FIREBASE_CLIENT_EMAIL.split('@')[0] : 'undefined'}`);
+console.log(`hasPrivateKey: ${Boolean(process.env.FIREBASE_PRIVATE_KEY)}`);
+console.log(`privateKeyStartsWithBegin: ${hasBeginKey}`);
+console.log(`privateKeyContainsEnd: ${hasEndKey}`);
+console.log(`databaseURL: ${process.env.FIREBASE_DATABASE_URL}`);
 console.log(`DEV_AUTH_BYPASS: ${process.env.DEV_AUTH_BYPASS === 'true' ? 'ВКЛЮЧЕН' : 'ВЫКЛЮЧЕН'}`);
 console.log(`NODE_ENV: ${process.env.NODE_ENV}`);
 
-if (!hasFirebaseAdminConfig) {
+// Validate required criteria
+if (hasFirebaseAdminConfig) {
+  if (process.env.FIREBASE_PROJECT_ID !== "terra-dashboard-acaab") {
+    console.warn("ПРЕДУПРЕЖДЕНИЕ: FIREBASE_PROJECT_ID не совпадает с terra-dashboard-acaab. Проверьте конфигурацию!");
+  }
+  if (process.env.FIREBASE_CLIENT_EMAIL && !process.env.FIREBASE_CLIENT_EMAIL.endsWith("@terra-dashboard-acaab.iam.gserviceaccount.com")) {
+    console.warn("ПРЕДУПРЕЖДЕНИЕ: FIREBASE_CLIENT_EMAIL не заканчивается на @terra-dashboard-acaab.iam.gserviceaccount.com!");
+  }
+  if (!hasBeginKey) {
+    console.warn("ПРЕДУПРЕЖДЕНИЕ: FIREBASE_PRIVATE_KEY не начинается с -----BEGIN PRIVATE KEY-----!");
+  }
+  if (!hasEndKey) {
+    console.warn("ПРЕДУПРЕЖДЕНИЕ: FIREBASE_PRIVATE_KEY не содержит -----END PRIVATE KEY-----!");
+  }
+} else {
   if (process.env.NODE_ENV === "production") {
     console.error("КРИТИЧЕСКАЯ ОШИБКА: Сервер запущен в режиме PRODUCTION, но переменные окружения FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL и FIREBASE_PRIVATE_KEY не заданы!");
   } else {
@@ -70,6 +94,29 @@ if (getApps().length === 0) {
     console.log("Firebase Admin SDK запущен с использованием проекта по умолчанию.");
   }
 }
+
+// Auto-promote pm.michelle.kreps@gmail.com to Admin persistently
+async function promoteDefaultAdmin() {
+  const adminEmail = 'pm.michelle.kreps@gmail.com';
+  try {
+    const user = await getAuth().getUserByEmail(adminEmail);
+    const userRecord = await getAuth().getUser(user.uid);
+    const role = userRecord.customClaims?.role;
+    if (role !== 'Admin') {
+      await getAuth().setCustomUserClaims(user.uid, { role: 'Admin' });
+      console.log(`[Firebase Admin Startup] Пользователь ${adminEmail} (UID: ${user.uid}) успешно повышен до роли Admin!`);
+    } else {
+      console.log(`[Firebase Admin Startup] Пользователь ${adminEmail} уже обладает постоянной ролью Admin.`);
+    }
+  } catch (err: any) {
+    if (err.code === 'auth/user-not-found') {
+      console.log(`[Firebase Admin Startup] Пользователь ${adminEmail} пока не зарегистрирован в Firebase Auth (будет повышен автоматически при первом входе).`);
+    } else {
+      console.error(`[Firebase Admin Startup] Ошибка при автопромоушне пользователя ${adminEmail}:`, err);
+    }
+  }
+}
+promoteDefaultAdmin();
 
 const app = express();
 const PORT = 3000;
@@ -109,28 +156,13 @@ const authMiddleware = async (req: any, res: any, next: any) => {
   try {
     const decodedToken = await getAuth().verifyIdToken(token);
     
-    // Normalization of claim role: can be admin/viewer (case-insensitive)
-    let role = decodedToken.role;
-    if (!role) {
-      const email = decodedToken.email || '';
-      if (email.toLowerCase().includes('admin') || email.toLowerCase() === 'pm.michelle@terra.altaya') {
-        role = 'Admin';
-        try {
-          await getAuth().setCustomUserClaims(decodedToken.uid, { role: 'Admin' });
-        } catch (claimsErr) {
-          console.error('Failed to set Admin custom claim:', claimsErr);
-        }
-      } else {
-        role = 'Viewer';
-        try {
-          await getAuth().setCustomUserClaims(decodedToken.uid, { role: 'Viewer' });
-        } catch (claimsErr) {
-          console.error('Failed to set Viewer custom claim:', claimsErr);
-        }
-      }
-    }
+    // Check if user is the main owner account to auto-grant Admin status immediately
+    const userEmail = decodedToken.email || "";
+    const isOwnerAdmin = userEmail.toLowerCase().trim() === 'pm.michelle.kreps@gmail.com';
 
-    const normalizedRole = (role === 'admin' || role === 'Admin') ? 'Admin' : 'Viewer';
+    // Normalization of claim role: read existing claims, otherwise default to viewer as requested
+    const rawRole = decodedToken.role || "viewer";
+    const normalizedRole = (rawRole === 'admin' || rawRole === 'Admin' || isOwnerAdmin) ? 'Admin' : 'Viewer';
 
     req.user = {
       uid: decodedToken.uid,
@@ -148,6 +180,17 @@ const authMiddleware = async (req: any, res: any, next: any) => {
     if (errMsg.includes("SERVICE_DISABLED") || errMsg.includes("identitytoolkit")) {
       return res.status(401).json({
         error: "В Firebase проекте не включен Authentication / Identity Toolkit API. Включите Authentication в Firebase Console."
+      });
+    }
+
+    if (
+      errMsg.includes("invalid_grant") || 
+      errMsg.includes("invalid-credential") || 
+      err?.code === "app/invalid-credential" || 
+      err?.code === "auth/invalid-credential"
+    ) {
+      return res.status(401).json({
+        error: "Серверный ключ Firebase Admin недействителен или был удален. Создайте новый private key в Firebase Console → Project settings → Service accounts → Generate new private key и обновите FIREBASE_CLIENT_EMAIL и FIREBASE_PRIVATE_KEY."
       });
     }
 
@@ -203,6 +246,80 @@ app.get('/api/db', (req: any, res) => {
     hasPrices: db.priceData.length > 0
   };
   res.json({ db: { ...db, role: req.role || 'Viewer' }, summary });
+});
+
+// Admin view and distribute user roles
+app.get('/api/admin/users', async (req: any, res) => {
+  const userEmail = req.user?.email || "";
+  const isOwner = userEmail.toLowerCase().trim() === 'pm.michelle.kreps@gmail.com';
+  
+  // Allow system owners and administrators to view the user lists
+  if (!isOwner && req.role !== 'Admin') {
+    return res.status(403).json({ error: 'Недостаточно прав. Только главный аккаунт или Администраторы могут видеть список пользователей.' });
+  }
+
+  try {
+    const listResult = await getAuth().listUsers(1000);
+    const users = listResult.users.map(u => {
+      const rawRole = u.customClaims?.role || "Viewer";
+      const normalizedRole = (u.email?.toLowerCase().trim() === 'pm.michelle.kreps@gmail.com' || rawRole === 'Admin' || rawRole === 'admin') ? 'Admin' : 'Viewer';
+      return {
+        uid: u.uid,
+        email: u.email || 'N/A',
+        displayName: u.displayName || u.email?.split('@')[0] || 'Пользователь',
+        role: normalizedRole,
+        creationTime: u.metadata.creationTime,
+        lastSignInTime: u.metadata.lastSignInTime
+      };
+    });
+    res.json({ users });
+  } catch (err: any) {
+    console.error('Failed to list Firebase users:', err);
+    // Safe sandbox fallback for dev testing / offline conditions
+    if (process.env.DEV_AUTH_BYPASS === 'true' || err?.code === 'auth/credential-error') {
+      return res.json({
+        users: [
+          { uid: 'owner-uid', email: 'pm.michelle.kreps@gmail.com', displayName: 'Главный Администратор (Вы)', role: 'Admin', creationTime: new Date().toISOString() },
+          { uid: 'viewer-test-uid', email: 'vladislav.test@gmail.com', displayName: 'Владислав Наблюдатель', role: 'Viewer', creationTime: new Date().toISOString() },
+          { uid: 'admin-test-uid', email: 'alexey.admin@gmail.com', displayName: 'Алексей Администратор', role: 'Admin', creationTime: new Date().toISOString() }
+        ]
+      });
+    }
+    res.status(500).json({ error: `При получении списка пользователей возникла ошибка: ${err.message}` });
+  }
+});
+
+app.post('/api/admin/users/role', async (req: any, res) => {
+  const userEmail = req.user?.email || "";
+  const isOwner = userEmail.toLowerCase().trim() === 'pm.michelle.kreps@gmail.com';
+  
+  if (!isOwner) {
+    return res.status(403).json({ error: 'Недостаточно прав. Только главный аккаунт (pm.michelle.kreps@gmail.com) может изменять роли пользователей.' });
+  }
+
+  const { targetUid, newRole } = req.body;
+  if (!targetUid || !newRole || (newRole !== 'Admin' && newRole !== 'Viewer')) {
+    return res.status(400).json({ error: 'Неверные параметры uid или роль.' });
+  }
+
+  try {
+    const targetUser = await getAuth().getUser(targetUid);
+    const targetEmail = targetUser.email || "";
+    if (targetEmail.toLowerCase().trim() === 'pm.michelle.kreps@gmail.com') {
+      return res.status(400).json({ error: 'Роль главного аккаунта всегда должна быть Администратор.' });
+    }
+
+    await getAuth().setCustomUserClaims(targetUid, { role: newRole });
+    console.log(`[Role Management] Роль пользователя ${targetEmail} (UID: ${targetUid}) успешно обновлена на ${newRole}.`);
+    
+    res.json({ status: 'ok', uid: targetUid, role: newRole });
+  } catch (err: any) {
+    console.error('Failed to update target user claims:', err);
+    if (process.env.DEV_AUTH_BYPASS === 'true') {
+      return res.json({ status: 'ok', uid: targetUid, role: newRole, mocked: true });
+    }
+    res.status(500).json({ error: `При изменении роли пользователя возникла ошибка: ${err.message}` });
+  }
 });
 
 // Switch roles (Admin/Viewer) - Dev Only
@@ -272,6 +389,72 @@ app.post('/api/mapping/update', (req: any, res) => {
   } else {
     res.status(400).json({ error: 'Неверный формат данных' });
   }
+});
+
+// API Live Revenue Validation & Diagnostics Debug Endpoint
+app.get('/api/debug/revenue-check', (req: any, res) => {
+  const db = readDatabase();
+  const revs = db.revenueData || [];
+
+  const uniqueDates = Array.from(new Set(revs.map((r: any) => r.date))).sort();
+  const uniqueUnits = Array.from(new Set(revs.map((r: any) => r.unitName))).sort();
+
+  // Total actual revenue
+  const totalActual = revs.reduce((sum: number, r: any) => sum + (r.actualRevenue || 0), 0);
+
+  // Exact dates calculations
+  const getRevenueForDate = (d: string) => {
+    return revs
+      .filter((r: any) => r.date === d)
+      .reduce((sum: number, r: any) => sum + (r.actualRevenue || 0), 0);
+  };
+
+  const val2026_06_15 = getRevenueForDate('2026-06-15');
+  const val2026_06_16 = getRevenueForDate('2026-06-16');
+  const val2026_06_21 = getRevenueForDate('2026-06-21');
+
+  // Week 2026-06-15..2026-06-21
+  const weekRevenue = revs
+    .filter((r: any) => r.date >= '2026-06-15' && r.date <= '2026-06-21')
+    .reduce((sum: number, r: any) => sum + (r.actualRevenue || 0), 0);
+
+  // Month 2026-06-01..2026-06-30
+  const monthRevenue = revs
+    .filter((r: any) => r.date >= '2026-06-01' && r.date <= '2026-06-30')
+    .reduce((sum: number, r: any) => sum + (r.actualRevenue || 0), 0);
+
+  // Check invalid units
+  const invalidUnitsList = uniqueUnits.filter((u: any) => {
+    const uLower = String(u || '').trim().toLowerCase();
+    return uLower === '0' || uLower === 'всего за проживание' || uLower.includes('итого') || uLower.includes('всего') || uLower.includes('сумма');
+  });
+
+  // Source files information
+  const sourceBnovo = db.imports.find(imp => imp.fileType === 'yearly_revenue_report' && imp.status === 'confirmed');
+  const sourcePrices = db.imports.find(imp => imp.fileType === 'price_list' && imp.status === 'confirmed');
+
+  res.json({
+    hasData: revs.length > 0,
+    sourceFile: sourceBnovo ? sourceBnovo.fileName : null,
+    physicalUnitsCount: uniqueUnits.length,
+    dateRowsCount: uniqueDates.length,
+    totalActualRevenue: totalActual,
+    dateRange: {
+      firstDate: uniqueDates[0] || null,
+      lastDate: uniqueDates[uniqueDates.length - 1] || null,
+    },
+    controls: {
+      date_2026_06_15: val2026_06_15,
+      date_2026_06_16: val2026_06_16,
+      date_2026_06_21: val2026_06_21,
+      week_2026_06_15_to_21: weekRevenue,
+      month_2026_06_01_to_30: monthRevenue,
+    },
+    hasInvalidUnits: invalidUnitsList.length > 0,
+    invalidUnits: invalidUnitsList,
+    reconciliationStatus: sourceBnovo ? 'confirmed' : 'missing_report',
+    allUnits: uniqueUnits,
+  });
 });
 
 // Middleware to catch multer errors consistently

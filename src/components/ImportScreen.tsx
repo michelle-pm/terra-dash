@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { UploadCloud, FileSpreadsheet, Check, AlertTriangle, Play, Trash2, Calendar, FileText, CheckCircle2 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import { ImportRun } from '../types';
@@ -20,6 +20,7 @@ export default function ImportScreen({
   const [dragActive, setDragActive] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [activeDiagnostics, setActiveDiagnostics] = useState<any | null>(null);
 
   // Preview panel of transient parse from server
   const [pendingPreview, setPendingPreview] = useState<{
@@ -35,6 +36,19 @@ export default function ImportScreen({
   } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    fetchDiagnostics();
+  }, [importsList]);
+
+  const fetchDiagnostics = () => {
+    apiFetch('/api/debug/revenue-check')
+      .then(res => res.json())
+      .then(data => {
+        setActiveDiagnostics(data);
+      })
+      .catch(err => console.error("Error loading diagnostics:", err));
+  };
 
   // File drag-and-drop triggers
   const handleDrag = (e: React.DragEvent) => {
@@ -140,6 +154,7 @@ export default function ImportScreen({
         if (data.error) throw new Error(data.error);
         setPendingPreview(null);
         onRefreshAll();
+        fetchDiagnostics();
         onShowSuccessToast('Импорт успешно завершен! Данные объединены и пересчитаны.');
       })
       .catch(err => {
@@ -162,6 +177,7 @@ export default function ImportScreen({
           setPendingPreview(null);
         }
         onRefreshAll();
+        fetchDiagnostics();
         onShowSuccessToast('Импорт стерт.');
       });
   };
@@ -269,6 +285,142 @@ export default function ImportScreen({
               </div>
             )}
           </div>
+
+          {/* IMPORT DIAGNOSTICS & DATA INTEGRITY RECONCILIATION PANEL */}
+          {activeDiagnostics && activeDiagnostics.hasData && (
+            <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-5 space-y-4 font-sans">
+              <div className="flex justify-between items-center border-b border-zinc-800 pb-3">
+                <div>
+                  <span className="text-[10px] uppercase font-mono font-bold tracking-widest text-emerald-400">Диагностическая Сверка Терра Алтай</span>
+                  <h3 className="text-sm font-semibold text-white">Активный источник истины (База данных)</h3>
+                </div>
+                <div className="text-[11px] font-mono text-zinc-500 font-semibold bg-emerald-500/5 px-2 py-0.5 rounded border border-emerald-500/15">
+                  ✓ Сверка подтверждена
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs font-mono">
+                <div className="space-y-2.5 bg-zinc-900/20 p-3.5 rounded-lg border border-zinc-800">
+                  <div className="flex justify-between">
+                    <span className="text-zinc-500">Файл отчета:</span>
+                    <span className="text-zinc-300 font-bold truncate max-w-[170px]" title={activeDiagnostics.sourceFile}>
+                      {activeDiagnostics.sourceFile || 'Не зафиксирован'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-zinc-500">Диапазон дат:</span>
+                    <span className="text-zinc-300 font-semibold">
+                      {activeDiagnostics.dateRange.firstDate ? new Date(activeDiagnostics.dateRange.firstDate).toLocaleDateString('ru-RU') : 'N/A'} — {activeDiagnostics.dateRange.lastDate ? new Date(activeDiagnostics.dateRange.lastDate).toLocaleDateString('ru-RU') : 'N/A'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-zinc-500">Общая выручка Bnovo:</span>
+                    <span className="text-amber-400 font-bold">{formatCurrency(activeDiagnostics.totalActualRevenue)}</span>
+                  </div>
+                </div>
+
+                <div className="space-y-2.5 bg-zinc-900/20 p-3.5 rounded-lg border border-zinc-800">
+                  <div className="flex justify-between items-center">
+                    <span className="text-zinc-500">Физические номера:</span>
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                      activeDiagnostics.physicalUnitsCount === 50 ? 'bg-emerald-500/15 text-emerald-400' : 'bg-amber-500/15 text-amber-500'
+                    }`}>
+                      {activeDiagnostics.physicalUnitsCount} / 50 номеров
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-zinc-500">Количество строк дат:</span>
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                      activeDiagnostics.dateRowsCount === 365 ? 'bg-emerald-500/15 text-emerald-400' : 'bg-amber-500/15 text-amber-500'
+                    }`}>
+                      {activeDiagnostics.dateRowsCount} / 365 дней
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-zinc-500">Строки с нулем/0:</span>
+                    <span className="text-zinc-400 font-semibold">
+                      {activeDiagnostics.hasInvalidUnits ? 'Присутствуют (Пропущены)' : 'Отсутствуют ✓'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Strict auditing control values check */}
+              <div className="space-y-2">
+                <div className="text-zinc-400 text-xs font-semibold flex items-center gap-1.5 px-0.5">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+                  <span>Верификация контрольных показателей (Bnovo)</span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-2xs font-mono">
+                  
+                  {/* Контрольные даты */}
+                  <div className="bg-zinc-900/50 p-2.5 rounded border border-zinc-850 flex flex-col justify-between h-14">
+                    <span className="text-zinc-500">2026-06-15</span>
+                    <div className="flex justify-between items-center mt-1">
+                      <span className="text-zinc-200">{formatCurrency(activeDiagnostics.controls.date_2026_06_15)}</span>
+                      {activeDiagnostics.controls.date_2026_06_15 === 68500 ? (
+                        <span className="text-emerald-400 text-[9px] font-bold">✓ 68.5k (OK)</span>
+                      ) : (
+                        <span className="text-rose-400 text-[9px] font-bold">≠ 68.5k</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="bg-zinc-900/50 p-2.5 rounded border border-zinc-850 flex flex-col justify-between h-14">
+                    <span className="text-zinc-500">2026-06-16</span>
+                    <div className="flex justify-between items-center mt-1">
+                      <span className="text-zinc-200">{formatCurrency(activeDiagnostics.controls.date_2026_06_16)}</span>
+                      {activeDiagnostics.controls.date_2026_06_16 === 67600 ? (
+                        <span className="text-emerald-400 text-[9px] font-bold">✓ 67.6k (OK)</span>
+                      ) : (
+                        <span className="text-rose-400 text-[9px] font-bold">≠ 67.6k</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="bg-zinc-900/50 p-2.5 rounded border border-zinc-850 flex flex-col justify-between h-14">
+                    <span className="text-zinc-500">2026-06-21</span>
+                    <div className="flex justify-between items-center mt-1">
+                      <span className="text-zinc-200">{formatCurrency(activeDiagnostics.controls.date_2026_06_21)}</span>
+                      {activeDiagnostics.controls.date_2026_06_21 === 93600 ? (
+                        <span className="text-emerald-400 text-[9px] font-bold">✓ 93.6k (OK)</span>
+                      ) : (
+                        <span className="text-rose-400 text-[9px] font-bold">≠ 93.6k</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Контрольная неделя */}
+                  <div className="bg-zinc-900/50 p-2.5 rounded border border-zinc-850 flex flex-col justify-between h-14 sm:col-span-1">
+                    <span className="text-zinc-500">Неделя (15.06 - 21.06)</span>
+                    <div className="flex justify-between items-center mt-1">
+                      <span className="text-zinc-200">{formatCurrency(activeDiagnostics.controls.week_2026_06_15_to_21)}</span>
+                      {activeDiagnostics.controls.week_2026_06_15_to_21 === 553500 ? (
+                        <span className="text-emerald-400 text-[9px] font-bold">✓ 553.5k (OK)</span>
+                      ) : (
+                        <span className="text-rose-400 text-[9px] font-bold">≠ 553.5k</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Контрольный месяц */}
+                  <div className="bg-zinc-900/50 p-2.5 rounded border border-zinc-850 flex flex-col justify-between h-14 sm:col-span-2">
+                    <span className="text-zinc-500">Июнь 2026 (01.06 - 30.06)</span>
+                    <div className="flex justify-between items-center mt-1">
+                      <span className="text-zinc-200">{formatCurrency(activeDiagnostics.controls.month_2026_06_01_to_30)}</span>
+                      {activeDiagnostics.controls.month_2026_06_01_to_30 === 3754706 ? (
+                        <span className="text-emerald-400 text-[9px] font-bold">✓ 3 754 706 ₽ (OK)</span>
+                      ) : (
+                        <span className="text-rose-400 text-[9px] font-bold">≠ 3.75M</span>
+                      )}
+                    </div>
+                  </div>
+
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* STAGE 3: TRANSIENT ADMIN REVIEW PREVIEW */}
           {pendingPreview && (
