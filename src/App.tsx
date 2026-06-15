@@ -1,9 +1,14 @@
 import React, { useState, useEffect } from 'react';
+import { onAuthStateChanged, User } from 'firebase/auth';
+import { auth } from './firebase';
+import AuthScreen from './components/AuthScreen';
 import Header from './components/Header';
 import DashboardScreen from './components/DashboardScreen';
 import CalendarScreen from './components/CalendarScreen';
 import AnalyticsScreen from './components/AnalyticsScreen';
 import ForecastScreen from './components/ForecastScreen';
+import MarketingScreen from './components/MarketingScreen';
+import BookingsScreen from './components/BookingsScreen';
 import ImportScreen from './components/ImportScreen';
 import MappingScreen from './components/MappingScreen';
 import TariffsScreen from './components/TariffsScreen';
@@ -21,13 +26,25 @@ import {
   History,
   DownloadCloud,
   CheckCircle2,
-  X
+  X,
+  Target,
+  UserCheck,
+  ChevronLeft,
+  ChevronRight,
+  Menu,
+  LayoutGrid
 } from 'lucide-react';
 import { ImportRun, CorrectionLog, CategoryMapping } from './types';
 
+// Start of App
 export default function App() {
+  const [user, setUser] = useState<User | null>(null);
+  const [authInitialized, setAuthInitialized] = useState(false);
+
   // Navigation active tab
   const [activeTab, setActiveTab] = useState<string>('dashboard');
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState<boolean>(false);
 
   // Server state storage
   const [dbState, setDbState] = useState<any>(null);
@@ -40,6 +57,14 @@ export default function App() {
 
   // Floating notifications toast
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setAuthInitialized(true);
+    });
+    return () => unsub();
+  }, []);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -48,6 +73,7 @@ export default function App() {
 
   // Central sync function
   const refreshAllState = () => {
+    if (!user) return;
     setIsLoading(true);
     // Fetch DB states
     const p1 = fetch('/api/db')
@@ -80,10 +106,20 @@ export default function App() {
       });
   };
 
-  // Run on start
+  // Run on start and when user becomes available
   useEffect(() => {
-    refreshAllState();
-  }, []);
+    if (user) {
+      refreshAllState();
+    }
+  }, [user]);
+
+  if (!authInitialized) {
+     return <div className="min-h-screen bg-zinc-950 flex items-center justify-center text-zinc-400">Загрузка...</div>;
+  }
+
+  if (!user) {
+     return <AuthScreen />;
+  }
 
   // Sandbox: Toggle between Admin and Viewer role profiles
   const toggleRole = () => {
@@ -153,6 +189,35 @@ export default function App() {
     rc => !mappings.find((m: any) => m.reportCategory === rc && m.priceListCategory !== '')
   ).length;
 
+  const tabGroups = [
+    {
+      title: 'Аналитика и Сводка',
+      items: [
+        { id: 'dashboard', name: 'Главная сводка', icon: Compass },
+        { id: 'calendar', name: 'Календарь потерь', icon: CalendarIcon },
+        { id: 'analytics', name: 'Анализ продаж', icon: BarChart3 },
+        { id: 'forecast', name: 'Прогнозы рисков', icon: Sparkles },
+      ]
+    },
+    {
+      title: 'Бизнес',
+      items: [
+        { id: 'bookings', name: 'Бронирования', icon: UserCheck },
+        { id: 'marketing', name: 'Реклама', icon: Target },
+      ]
+    },
+    {
+      title: 'Настройки и Импорт',
+      items: [
+        { id: 'import', name: 'Импорт Excel', icon: UploadCloud, badge: isAdmin ? undefined : 'Наблюдатель' },
+        { id: 'mappings', name: 'Соответствия', icon: Layers, badge: unmappedCount > 0 ? unmappedCount : undefined, attention: unmappedCount > 0 },
+        { id: 'tariffs', name: 'Тарифная сетка', icon: Settings },
+        { id: 'logs', name: 'Журнал коррекций', icon: History },
+        { id: 'export', name: 'Выгрузки', icon: DownloadCloud },
+      ]
+    }
+  ];
+
   return (
     <div className="min-h-screen bg-[#050505] text-[#EDEDED] selection:bg-red-600 selection:text-white font-sans">
       
@@ -178,199 +243,217 @@ export default function App() {
       />
 
       {/* MAIN CONTAINER */}
-      <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-        
-        {/* TAB WORKSPACE NAVIGATOR RAIL */}
-        <div className="flex bg-[#0A0A0A] p-1.5 rounded-xl border border-[#1F1F1F] mb-8 font-semibold overflow-x-auto gap-1.5 scrollbar-thin">
+      <div className="mx-auto max-w-[1400px] px-4 py-8 sm:px-6 lg:px-8">
+        <div className="flex flex-col md:flex-row gap-6 items-start">
           
-          <button
-            onClick={() => setActiveTab('dashboard')}
-            className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs transition-all whitespace-nowrap cursor-pointer ${
-              activeTab === 'dashboard'
-                ? 'bg-red-600 border border-red-700 text-white shadow-lg'
-                : 'text-zinc-400 hover:text-white hover:bg-zinc-900/40'
-            }`}
-          >
-            <Compass className="h-3.5 w-3.5" />
-            <span>Главная сводка</span>
-          </button>
+          {/* SIDEBAR FOR DESKTOP */}
+          <aside className={`shrink-0 transition-all duration-300 ${
+            isSidebarCollapsed ? 'w-16' : 'w-64'
+          } hidden md:block bg-[#0A0A0A] border border-[#1F1F1F] rounded-xl p-3 h-auto sticky top-20`}>
+            
+            <div className={`flex items-center ${isSidebarCollapsed ? 'justify-center mb-4' : 'justify-between mb-4 pb-2 border-b border-[#1F1F1F]'}`}>
+              {!isSidebarCollapsed && (
+                <div className="flex items-center gap-1.5 px-1">
+                  <LayoutGrid className="h-4 w-4 text-red-500" />
+                  <span className="text-xs font-mono font-bold uppercase tracking-wider text-zinc-400">Навигация</span>
+                </div>
+              )}
+              <button
+                onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+                className="p-1 rounded-md bg-zinc-900/50 hover:bg-zinc-800 text-zinc-400 hover:text-white transition-all cursor-pointer"
+                title={isSidebarCollapsed ? "Развернуть меню" : "Свернуть меню"}
+              >
+                {isSidebarCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+              </button>
+            </div>
 
-          <button
-            onClick={() => setActiveTab('calendar')}
-            className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs transition-all whitespace-nowrap cursor-pointer ${
-              activeTab === 'calendar'
-                ? 'bg-red-600 border border-red-700 text-white shadow-lg'
-                : 'text-zinc-400 hover:text-white hover:bg-zinc-900/40'
-            }`}
-          >
-            <CalendarIcon className="h-3.5 w-3.5" />
-            <span>Календарь потерь</span>
-          </button>
+            <nav className="space-y-4">
+              {tabGroups.map(group => (
+                <div key={group.title} className="space-y-1">
+                  {!isSidebarCollapsed && (
+                    <div className="text-[10px] font-mono font-bold uppercase tracking-wider text-zinc-500 px-2.5 pt-2 pb-1">
+                      {group.title}
+                    </div>
+                  )}
+                  {isSidebarCollapsed && (
+                    <div className="h-px bg-zinc-900 my-2" />
+                  )}
+                  
+                  <div className="space-y-0.5">
+                    {group.items.map(item => {
+                      const Icon = item.icon;
+                      const isActive = activeTab === item.id;
+                      
+                      return (
+                        <button
+                          key={item.id}
+                          onClick={() => setActiveTab(item.id)}
+                          className={`w-full flex items-center transition-all px-2.5 py-2 rounded-lg text-xs cursor-pointer ${
+                            isSidebarCollapsed ? 'justify-center' : 'justify-between'
+                          } ${
+                            isActive
+                              ? 'bg-red-600 border border-red-700 text-white shadow-lg font-medium'
+                              : 'text-zinc-400 hover:text-white hover:bg-zinc-900/40'
+                          }`}
+                          title={isSidebarCollapsed ? item.name : undefined}
+                        >
+                          <div className="flex items-center gap-2">
+                            <Icon className="h-4 w-4 shrink-0" />
+                            {!isSidebarCollapsed && <span className="font-medium">{item.name}</span>}
+                          </div>
+                          
+                          {!isSidebarCollapsed && item.badge !== undefined && (
+                            <span className={`px-1.5 py-0.2 text-[9px] rounded-full font-bold ${
+                              item.attention ? 'bg-red-500 text-white animate-pulse' : 'bg-zinc-800 text-zinc-400'
+                            }`}>
+                              {item.badge}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </nav>
+          </aside>
 
-          <button
-            onClick={() => setActiveTab('analytics')}
-            className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs transition-all whitespace-nowrap cursor-pointer ${
-              activeTab === 'analytics'
-                ? 'bg-red-600 border border-red-700 text-white shadow-lg'
-                : 'text-zinc-400 hover:text-white hover:bg-zinc-900/40'
-            }`}
-          >
-            <BarChart3 className="h-3.5 w-3.5" />
-            <span>Анализ продаж</span>
-          </button>
+          {/* MOBILE TOGGLER & DROP DOWN */}
+          <div className="md:hidden w-full bg-[#0A0A0A] border border-[#1F1F1F] rounded-xl p-2.5 mb-2">
+            <div className="flex items-center justify-between">
+              <button 
+                onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+                className="flex items-center gap-2 px-3 py-2 bg-zinc-950 hover:bg-zinc-905 border border-[#1F1F1F] rounded-lg text-xs font-semibold text-zinc-200"
+              >
+                <Menu className="h-4 w-4 text-red-500" />
+                <span>Разделы меню</span>
+              </button>
+              <div className="flex items-center gap-1.5 bg-zinc-950/40 border border-[#1F1F1F] px-3 py-1.5 rounded-lg text-xs leading-none">
+                <span className="text-zinc-500 font-medium">Экран:</span>
+                <span className="text-red-400 font-bold">
+                  {tabGroups.flatMap(g => g.items).find(i => i.id === activeTab)?.name || activeTab}
+                </span>
+              </div>
+            </div>
 
-          <button
-            onClick={() => setActiveTab('forecast')}
-            className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs transition-all whitespace-nowrap cursor-pointer ${
-              activeTab === 'forecast'
-                ? 'bg-red-600 border border-red-700 text-white shadow-lg'
-                : 'text-zinc-400 hover:text-white hover:bg-zinc-900/40'
-            }`}
-          >
-            <Sparkles className="h-3.5 w-3.5" />
-            <span>Прогнозы рисков</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('import')}
-            className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs transition-all whitespace-nowrap cursor-pointer ${
-              activeTab === 'import'
-                ? 'bg-red-600 border border-red-700 text-white shadow-lg'
-                : 'text-zinc-400 hover:text-white hover:bg-zinc-900/40'
-            } ${isAdmin ? '' : 'opacity-70'}`}
-          >
-            <UploadCloud className="h-3.5 w-3.5" />
-            <span>Импорт Excel</span>
-            <span className="text-[9px] px-1 py-0.5 bg-zinc-800 rounded font-normal text-zinc-400 hidden sm:inline">Админ</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('mappings')}
-            className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs transition-all whitespace-nowrap cursor-pointer ${
-              activeTab === 'mappings'
-                ? 'bg-red-600 border border-red-700 text-white shadow-lg'
-                : 'text-zinc-400 hover:text-white hover:bg-zinc-900/40'
-            } ${unmappedCount > 0 ? 'ring-1 ring-red-500' : ''}`}
-          >
-            <Layers className="h-3.5 w-3.5" />
-            <span>Соответствия</span>
-            {unmappedCount > 0 && (
-              <span className="rounded-full bg-red-600 px-1.5 py-0.2 text-[9px] text-white font-bold">{unmappedCount}</span>
+            {isMobileMenuOpen && (
+              <div className="mt-2.5 pt-2.5 border-t border-[#1F1F1F] space-y-3">
+                {tabGroups.map(group => (
+                  <div key={group.title} className="space-y-1">
+                    <div className="text-[10px] font-mono uppercase tracking-wider text-zinc-500 px-2 pt-1">
+                      {group.title}
+                    </div>
+                    <div className="grid grid-cols-2 gap-1">
+                      {group.items.map(item => {
+                        const Icon = item.icon;
+                        const isActive = activeTab === item.id;
+                        return (
+                          <button
+                            key={item.id}
+                            onClick={() => {
+                              setActiveTab(item.id);
+                              setIsMobileMenuOpen(false);
+                            }}
+                            className={`flex items-center gap-2 p-2 rounded-lg text-xs transition-all text-left cursor-pointer ${
+                              isActive
+                                ? 'bg-red-600 text-white font-medium'
+                                : 'bg-zinc-950/40 hover:bg-zinc-900 text-zinc-400 hover:text-white'
+                            }`}
+                          >
+                            <Icon className="h-3.5 w-3.5 shrink-0" />
+                            <span className="truncate">{item.name}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
-          </button>
-
-          <button
-            onClick={() => setActiveTab('tariffs')}
-            className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs transition-all whitespace-nowrap cursor-pointer ${
-              activeTab === 'tariffs'
-                ? 'bg-red-600 border border-red-700 text-white shadow-lg'
-                : 'text-zinc-400 hover:text-white hover:bg-zinc-900/40'
-            }`}
-          >
-            <Settings className="h-3.5 w-3.5" />
-            <span>Тарифная сетка</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('logs')}
-            className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs transition-all whitespace-nowrap cursor-pointer ${
-              activeTab === 'logs'
-                ? 'bg-red-600 border border-red-700 text-white shadow-lg'
-                : 'text-zinc-400 hover:text-white hover:bg-zinc-900/40'
-            }`}
-          >
-            <History className="h-3.5 w-3.5" />
-            <span>Журнал коррекций</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('export')}
-            className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs transition-all whitespace-nowrap cursor-pointer ${
-              activeTab === 'export'
-                ? 'bg-red-600 border border-red-700 text-white shadow-lg'
-                : 'text-zinc-400 hover:text-white hover:bg-zinc-900/40'
-            }`}
-          >
-            <DownloadCloud className="h-3.5 w-3.5" />
-            <span>Выгрузки</span>
-          </button>
-
-        </div>
-
-        {/* LOADING SHIM */}
-        {isLoading && (
-          <div className="relative py-12 text-center text-zinc-500 bg-[#050505]">
-            <span className="inline-block animate-spin rounded-full h-8 w-8 border-2 border-t-red-600 border-[#1F1F1F]" />
-            <p className="text-xs text-zinc-500 font-mono mt-1">Переподключение и вычисление финансовых моделей...</p>
           </div>
-        )}
 
-        {/* PRIMARY PANES CONTROLLERS */}
-        <div className={isLoading ? 'opacity-30 pointer-events-none transition-all' : 'transition-all'}>
-          {activeTab === 'dashboard' && (
-            <DashboardScreen
-              data={dashboardState || { hasData: false }}
-              onNavigateToTab={setActiveTab}
-              onLoadDemo={triggerDemoLoad}
-              hasRevenue={hasRevenue}
-              hasPrices={hasPrices}
-              unmappedCount={unmappedCount}
-            />
-          )}
+          {/* CONTENT WORKSPACE AREA */}
+          <div className="flex-1 w-full min-w-0">
+            
+            {/* LOADING SHIM */}
+            {isLoading && (
+              <div className="relative py-12 text-center text-zinc-500 bg-[#050505] rounded-xl border border-[#1F1F1F] mb-6">
+                <span className="inline-block animate-spin rounded-full h-8 w-8 border-2 border-t-red-600 border-[#1F1F1F]" />
+                <p className="text-xs text-zinc-500 font-mono mt-1">Переподключение и вычисление финансовых моделей...</p>
+              </div>
+            )}
 
-          {activeTab === 'calendar' && (
-            <CalendarScreen
-              metrics={calendarMetrics}
-              isAdmin={isAdmin}
-              onNavigateToTab={setActiveTab}
-            />
-          )}
+            <div className={isLoading ? 'opacity-30 pointer-events-none transition-all' : 'transition-all'}>
+              {activeTab === 'dashboard' && (
+                <DashboardScreen
+                  data={dashboardState || { hasData: false }}
+                  onNavigateToTab={setActiveTab}
+                  onLoadDemo={triggerDemoLoad}
+                  hasRevenue={hasRevenue}
+                  hasPrices={hasPrices}
+                  unmappedCount={unmappedCount}
+                />
+              )}
 
-          {activeTab === 'analytics' && (
-            <AnalyticsScreen categoriesList={reportCategories} />
-          )}
+              {activeTab === 'calendar' && (
+                <CalendarScreen
+                  metrics={calendarMetrics}
+                  isAdmin={isAdmin}
+                  onNavigateToTab={setActiveTab}
+                />
+              )}
 
-          {activeTab === 'forecast' && <ForecastScreen />}
+              {activeTab === 'analytics' && (
+                <AnalyticsScreen categoriesList={reportCategories} />
+              )}
 
-          {activeTab === 'import' && (
-            <ImportScreen
-              importsList={imports}
-              isAdmin={isAdmin}
-              onRefreshAll={refreshAllState}
-              onShowSuccessToast={showToast}
-            />
-          )}
+              {activeTab === 'forecast' && <ForecastScreen />}
 
-          {activeTab === 'mappings' && (
-            <MappingScreen
-              reportCategories={reportCategories}
-              priceListCategories={priceListCategories}
-              mappings={mappings}
-              isAdmin={isAdmin}
-              onUpdateMappings={handleUpdateMappings}
-            />
-          )}
+              {activeTab === 'bookings' && <BookingsScreen />}
 
-          {activeTab === 'tariffs' && (
-            <TariffsScreen
-              categoriesList={priceListCategories}
-              isAdmin={isAdmin}
-              onRefreshAll={refreshAllState}
-              onShowSuccessToast={showToast}
-            />
-          )}
+              {activeTab === 'marketing' && <MarketingScreen />}
 
-          {activeTab === 'logs' && <LogsScreen logs={logs} />}
+              {activeTab === 'import' && (
+                <ImportScreen
+                  importsList={imports}
+                  isAdmin={isAdmin}
+                  onRefreshAll={refreshAllState}
+                  onShowSuccessToast={showToast}
+                />
+              )}
 
-          {activeTab === 'export' && (
-            <ExportScreen
-              logsList={logs}
-              importsList={imports}
-              hasRevenue={hasRevenue}
-            />
-          )}
+              {activeTab === 'mappings' && (
+                <MappingScreen
+                  reportCategories={reportCategories}
+                  priceListCategories={priceListCategories}
+                  mappings={mappings}
+                  isAdmin={isAdmin}
+                  onUpdateMappings={handleUpdateMappings}
+                />
+              )}
+
+              {activeTab === 'tariffs' && (
+                <TariffsScreen
+                  categoriesList={priceListCategories}
+                  isAdmin={isAdmin}
+                  onRefreshAll={refreshAllState}
+                  onShowSuccessToast={showToast}
+                />
+              )}
+
+              {activeTab === 'logs' && <LogsScreen logs={logs} />}
+
+              {activeTab === 'export' && (
+                <ExportScreen
+                  logsList={logs}
+                  importsList={imports}
+                  hasRevenue={hasRevenue}
+                />
+              )}
+            </div>
+          </div>
+
         </div>
-
       </div>
     </div>
   );

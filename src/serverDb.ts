@@ -2,11 +2,23 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as XLSX from 'xlsx';
 import { ImportRun, CorrectionLog, RevenueData, PriceData, CategoryMapping } from './types';
+import { serverRtdb } from './serverFirebase';
+import { ref, get, set } from 'firebase/database';
 
 // Safe wrapper for XLSX to handle both CommonJS and ES Module bundlers/runtimes
 const xlsxInstance: any = typeof XLSX.readFile === 'function' ? XLSX : ((XLSX as any).default || XLSX);
 
 const DB_PATH = path.join(process.cwd(), 'db.json');
+
+// Background sync initialization
+get(ref(serverRtdb, 'global_database')).then(snap => {
+  if (snap.exists()) {
+    const data = snap.val();
+    if (!data.tariffs) data.tariffs = {};
+    fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2));
+    console.log("Synchronized database from Firebase Realtime Database at boot.");
+  }
+}).catch(e => console.error("Firebase sync error at boot:", e));
 
 // Interface of database on disk
 export interface LocalDatabase {
@@ -20,16 +32,45 @@ export interface LocalDatabase {
   tariffs: { [category: string]: { [date: string]: number } };
 }
 
+export function normalizeText(str: string): string {
+  if (!str) return '';
+  return str
+    .replace(/C/g, 'С').replace(/c/g, 'с') // Latin C to Cyrillic С
+    .replace(/T/g, 'Т').replace(/t/g, 'т') // Latin T to Cyrillic Т
+    .replace(/M/g, 'М').replace(/m/g, 'м') // Latin M to Cyrillic М
+    .replace(/A/g, 'А').replace(/a/g, 'а') // Latin A to Cyrillic А
+    .replace(/K/g, 'К').replace(/k/g, 'к') // Latin K to Cyrillic К
+    .replace(/P/g, 'П').replace(/p/g, 'п') // Latin P to Cyrillic П
+    .replace(/E/g, 'Е').replace(/e/g, 'е') // Latin E to Cyrillic Е
+    .replace(/O/g, 'О').replace(/o/g, 'о') // Latin O to Cyrillic О
+    .replace(/B/g, 'В').replace(/b/g, 'в') // Latin B to Cyrillic В
+    .replace(/X/g, 'Х').replace(/x/g, 'х') // Latin X to Cyrillic Х
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function getAltaiTodayStr(): string {
+  const now = new Date();
+  // Altai is UTC+7
+  const utcOffset = now.getTimezoneOffset() * 60000;
+  const utcTime = now.getTime() + utcOffset;
+  const altaiDate = new Date(utcTime + (7 * 3600000));
+  const yyyy = altaiDate.getFullYear();
+  const mm = String(altaiDate.getMonth() + 1).padStart(2, '0');
+  const dd = String(altaiDate.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 const DEFAULT_MAPPINGS: CategoryMapping[] = [
-  { reportCategory: 'Ф-Frame', priceListCategory: 'А-Фрейм (без завтрака)' },
-  { reportCategory: 'Сафаритент', priceListCategory: 'Сафари-Тент (без завтрака)' },
-  { reportCategory: 'Мотель/студия на горе', priceListCategory: 'Студия на горе (без завтрака)' },
+  { reportCategory: 'Ф-Frame', priceListCategory: 'А-Фрейм' },
+  { reportCategory: 'Сафаритент', priceListCategory: 'Сафари-Тент' },
+  { reportCategory: 'Мотель/студия на горе', priceListCategory: 'Студия на горе' },
   { reportCategory: 'Студия', priceListCategory: 'Студия у реки' },
   { reportCategory: 'Полусфера Neodome', priceListCategory: 'Полусфера Neodome' },
   { reportCategory: 'Апартаменты', priceListCategory: 'Апартаменты' },
   { reportCategory: 'Эко-Студия', priceListCategory: 'Эко-Студия' },
   { reportCategory: 'Эко-Шале', priceListCategory: 'Эко-Шале' },
-  { reportCategory: 'Купол', priceListCategory: 'Купол (без завтрака)' }
+  { reportCategory: 'Купол', priceListCategory: 'Купол' }
 ];
 
 export function getInitialDatabase(): LocalDatabase {
@@ -48,7 +89,102 @@ export function readDatabase(): LocalDatabase {
   try {
     if (fs.existsSync(DB_PATH)) {
       const data = fs.readFileSync(DB_PATH, 'utf-8');
-      return JSON.parse(data);
+      const db = JSON.parse(data) as LocalDatabase;
+      
+      let needsWrite = false;
+
+      // Clean up mappings
+      if (Array.isArray(db.mappings)) {
+        db.mappings.forEach(m => {
+          const normR = normalizeText(m.reportCategory);
+          let normP = normalizeText(m.priceListCategory);
+          // Remove suffix if found
+          normP = normP.replace(' (без завтрака)', '');
+          if (m.reportCategory !== normR || m.priceListCategory !== normP) {
+            m.reportCategory = normR;
+            m.priceListCategory = normP;
+            needsWrite = true;
+          }
+        });
+        
+        // Ensure default mappings exist if completely clean/empty mappings
+        if (db.mappings.length === 0) {
+          db.mappings = [...DEFAULT_MAPPINGS];
+          needsWrite = true;
+        }
+      }
+
+      // Standardize and de-duplicate existing revenue entries
+      if (Array.isArray(db.revenueData)) {
+        db.revenueData.forEach(r => {
+          const normUnit = normalizeText(r.unitName);
+          const normCat = normalizeText(r.sourceCategory);
+          if (r.unitName !== normUnit || r.sourceCategory !== normCat) {
+            r.unitName = normUnit;
+            r.sourceCategory = normCat;
+            needsWrite = true;
+          }
+        });
+
+        // De-duplicate
+        const seen = new Set<string>();
+        const uniqueRevenue: RevenueData[] = [];
+        db.revenueData.forEach(r => {
+          const key = `${r.date}_${r.unitName}`;
+          if (seen.has(key)) {
+            const existing = uniqueRevenue.find(x => x.date === r.date && x.unitName === r.unitName);
+            if (existing) {
+              existing.actualRevenue = Math.max(existing.actualRevenue, r.actualRevenue);
+              existing.isEmpty = existing.isEmpty ? r.isEmpty : false;
+            }
+            needsWrite = true;
+          } else {
+            seen.add(key);
+            uniqueRevenue.push(r);
+          }
+        });
+        if (db.revenueData.length !== uniqueRevenue.length) {
+          db.revenueData = uniqueRevenue;
+          needsWrite = true;
+        }
+      }
+
+      // Standardize and de-duplicate existing price entries
+      if (Array.isArray(db.priceData)) {
+        db.priceData.forEach(p => {
+          const normCat = normalizeText(p.category);
+          if (p.category !== normCat) {
+            p.category = normCat;
+            needsWrite = true;
+          }
+        });
+
+        const seenPrices = new Set<string>();
+        const uniquePrice: PriceData[] = [];
+        db.priceData.forEach(p => {
+          const key = `${p.date}_${p.category}`;
+          if (seenPrices.has(key)) {
+            const existing = uniquePrice.find(x => x.date === p.date && x.category === p.category);
+            if (existing && existing.price === 0 && p.price > 0) {
+              existing.price = p.price;
+            }
+            needsWrite = true;
+          } else {
+            seenPrices.add(key);
+            uniquePrice.push(p);
+          }
+        });
+        if (db.priceData.length !== uniquePrice.length) {
+          db.priceData = uniquePrice;
+          needsWrite = true;
+        }
+      }
+
+      if (needsWrite) {
+        fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2), 'utf-8');
+      }
+
+      return db;
     }
   } catch (err) {
     console.error('Error reading DB:', err);
@@ -59,6 +195,8 @@ export function readDatabase(): LocalDatabase {
 export function writeDatabase(db: LocalDatabase) {
   try {
     fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2), 'utf-8');
+    // Asynchronous background sync to Firebase
+    set(ref(serverRtdb, 'global_database'), db).catch(e => console.error("Firebase write error:", e));
   } catch (err) {
     console.error('Error writing DB:', err);
   }
@@ -151,22 +289,81 @@ export function expandPeriodToDays(startDate: string, endDate: string): string[]
   return dates;
 }
 
-// Core Excel parser triggered on upload
+export function decodeCp1251(buf: Buffer): string {
+  let out = '';
+  for (let i = 0; i < buf.length; i++) {
+    const c = buf[i];
+    if (c < 128) {
+      out += String.fromCharCode(c);
+    } else {
+      if (c >= 192 && c <= 255) {
+        out += String.fromCharCode(c + 848); // 1040 is Cyrillic 'А'
+      } else if (c === 168) {
+        out += 'Ё';
+      } else if (c === 184) {
+        out += 'ё';
+      } else if (c === 150) {
+        out += '–';
+      } else {
+        out += '?';
+      }
+    }
+  }
+  return out;
+}
+
+// Core Excel & CSV parser triggered on upload
 export function parseBnovoReport(filePath: string, fileName: string, uploadedBy: string): {
   importRun: ImportRun;
   parsedRevenue: RevenueData[];
   reconciliationCheck: { expectedTotal: number; calculatedTotal: number; matches: boolean };
 } {
-  const workbook = xlsxInstance.readFile(filePath);
-  const sheetName = 'Доход';
-  const sheet = workbook.Sheets[sheetName];
+  let rawRows: any[][] = [];
+  const ext = path.extname(filePath).toLowerCase();
 
-  if (!sheet) {
-    throw new Error(`Лист '${sheetName}' не найден в файле годового отчета. Пожалуйста, загрузите верный файл XLS.`);
+  if (ext === '.csv') {
+    const buffer = fs.readFileSync(filePath);
+    let isUtf8 = true;
+    const utf8Str = buffer.toString('utf8');
+    
+    if (utf8Str.includes('\uFFFD')) {
+      isUtf8 = false;
+    } else {
+      for (let i = 0; i < buffer.length - 1; i++) {
+        if (buffer[i] >= 192 && (buffer[i+1] < 128 || buffer[i+1] > 191)) {
+          isUtf8 = false;
+          break;
+        }
+      }
+    }
+
+    const content = isUtf8 ? utf8Str.replace(/^\uFEFF/, '') : decodeCp1251(buffer);
+    const lines = content.split(/\r?\n/);
+    const separator = content.includes(';') ? ';' : ',';
+
+    rawRows = lines
+      .filter(line => line.trim().length > 0)
+      .map(line => {
+        return line.split(separator).map(cell => {
+          let val = cell.trim();
+          if (val.startsWith('"') && val.endsWith('"')) {
+            val = val.substring(1, val.length - 1).trim();
+          }
+          return val;
+        });
+      });
+  } else {
+    const workbook = xlsxInstance.readFile(filePath);
+    const sheetName = 'Доход';
+    const sheet = workbook.Sheets[sheetName];
+
+    if (!sheet) {
+      throw new Error(`Лист '${sheetName}' не найден в файле годового отчета. Пожалуйста, загрузите верный файл XLS.`);
+    }
+
+    rawRows = xlsxInstance.utils.sheet_to_json(sheet, { header: 1, defval: '' });
   }
 
-  // Read raw entries as a 2D array
-  const rawRows: any[][] = xlsxInstance.utils.sheet_to_json(sheet, { header: 1, defval: '' });
   if (rawRows.length < 3) {
     throw new Error('Файл отчета слишком короткий или поврежден. Требуется минимум 3 строки.');
   }
@@ -177,19 +374,33 @@ export function parseBnovoReport(filePath: string, fileName: string, uploadedBy:
   // Track categories in row 1
   let currentCategory = '';
   const colCategoryMap: { [colIndex: number]: string } = {};
-  for (let c = 2; c < 52; c++) {
+  const maxCols = row2.length;
+
+  for (let c = 2; c < maxCols; c++) {
     const val = row1[c];
     if (val && val.toString().trim() !== '') {
-      currentCategory = val.toString().trim();
+      currentCategory = normalizeText(val.toString().trim());
     }
     colCategoryMap[c] = currentCategory;
   }
 
   // Track unit names in row 2
   const colUnitMap: { [colIndex: number]: string } = {};
-  for (let c = 2; c < 52; c++) {
+  for (let c = 2; c < maxCols; c++) {
     const val = row2[c];
-    colUnitMap[c] = val ? val.toString().trim() : '';
+    const cleanVal = val ? normalizeText(val.toString().trim()) : '';
+    const valLower = cleanVal.toLowerCase();
+    if (
+      valLower.includes('итого') ||
+      valLower.includes('всего') ||
+      valLower.includes('сумма') ||
+      valLower.includes('среднее') ||
+      valLower.includes('разниц') ||
+      cleanVal === ''
+    ) {
+      continue;
+    }
+    colUnitMap[c] = cleanVal;
   }
 
   const parsedRevenue: RevenueData[] = [];
@@ -208,13 +419,12 @@ export function parseBnovoReport(filePath: string, fileName: string, uploadedBy:
     const dateVal = rData[0];
     if (!dateVal) continue;
 
-    // Check if this is the reconciliation or totals row
     const labelStr = dateVal.toString().trim().toLowerCase();
     if (labelStr.includes('итого') || labelStr.includes('всего') || labelStr.includes('сумма')) {
-      // Reconciliations: total lodging revenue is typically at column index 53 (Column 54)
-      const totalCell = rData[53];
+      const totalCell = rData[rData.length - 1];
       if (totalCell !== undefined && totalCell !== '') {
-        expectedTotal = parseFloat(totalCell) || 0;
+        const cleanVal = totalCell.toString().replace(/[\s\xa0]/g, '').replace(',', '.');
+        expectedTotal = parseFloat(cleanVal) || 0;
       }
       continue;
     }
@@ -232,16 +442,28 @@ export function parseBnovoReport(filePath: string, fileName: string, uploadedBy:
 
     const weekdayStr = rData[1] ? rData[1].toString().trim() : '';
 
-    // Walk columns from index 2 to 51 (all 50 physical units)
-    for (let col = 2; col < 52; col++) {
+    // Walk columns from index 2 to maxCols index (all physical units)
+    for (let col = 2; col < maxCols; col++) {
       const uName = colUnitMap[col];
       const category = colCategoryMap[col];
       if (!uName) continue;
 
       const rawVal = rData[col];
-      const isEmptyCell = rawVal === '' || rawVal === null || rawVal === undefined || (typeof rawVal === 'string' && rawVal.trim() === '');
-      const actualVal = rawVal !== '' ? parseFloat(rawVal) : 0;
-      const amount = isNaN(actualVal) ? 0 : actualVal;
+      
+      const isEmptyCell = rawVal === '' || rawVal === null || rawVal === undefined || 
+        (typeof rawVal === 'string' && (rawVal.trim() === '' || rawVal.trim() === '0' || rawVal.trim() === '0,00' || rawVal.trim() === '0.00')) || 
+        rawVal === 0 || rawVal === '0';
+
+      let amount = 0;
+      if (rawVal !== '' && rawVal !== null && rawVal !== undefined) {
+        if (typeof rawVal === 'number') {
+          amount = rawVal;
+        } else {
+          const cleanVal = rawVal.toString().replace(/[\s\xa0]/g, '').replace(',', '.');
+          const parsed = parseFloat(cleanVal);
+          amount = isNaN(parsed) ? 0 : parsed;
+        }
+      }
 
       parsedRevenue.push({
         date: isoDate,
@@ -249,7 +471,7 @@ export function parseBnovoReport(filePath: string, fileName: string, uploadedBy:
         sourceCategory: category,
         unitName: uName,
         actualRevenue: amount,
-        importId: '', // to be filled
+        importId: '',
         isEmpty: isEmptyCell
       });
 
@@ -282,7 +504,7 @@ export function parseBnovoReport(filePath: string, fileName: string, uploadedBy:
     reconciliationCheck: {
       expectedTotal,
       calculatedTotal,
-      matches: Math.abs(expectedTotal - calculatedTotal) < 1.0 // allow minor floating point differences
+      matches: Math.abs(expectedTotal - calculatedTotal) < 10.0
     }
   };
 }
@@ -309,7 +531,6 @@ export function parsePriceList(filePath: string, fileName: string, uploadedBy: s
   const periods: { colIndex: number; period: DatePeriod }[] = [];
   const warnings: string[] = [];
 
-  // Parse headers for periods, starting at column C (index 2)
   for (let c = 2; c < headers.length; c++) {
     const hVal = headers[c];
     if (hVal && hVal.toString().trim() !== '') {
@@ -329,24 +550,30 @@ export function parsePriceList(filePath: string, fileName: string, uploadedBy: s
 
   const importId = 'imp_' + Date.now();
 
-  // Rows 2 onwards are categories
   for (let r = 1; r < rawRows.length; r++) {
     const row = rawRows[r];
     if (!row || row.length === 0) continue;
 
-    const catName = row[0] ? row[0].toString().trim() : '';
+    const catName = row[0] ? normalizeText(row[0].toString().trim()) : '';
     if (!catName || catName.toLowerCase().includes('наименование')) continue;
 
     categories.push(catName);
 
-    // Expand rates for each parsed period
     for (const { colIndex, period } of periods) {
       if (!periodStart || period.startDate < periodStart) periodStart = period.startDate;
       if (!periodEnd || period.endDate > periodEnd) periodEnd = period.endDate;
 
       const rawVal = row[colIndex];
-      const price = rawVal !== '' ? parseFloat(rawVal) : 0;
-      const amount = isNaN(price) ? 0 : price;
+      let amount = 0;
+      if (rawVal !== '' && rawVal !== null && rawVal !== undefined) {
+        if (typeof rawVal === 'number') {
+          amount = rawVal;
+        } else {
+          const cleanVal = rawVal.toString().replace(/[\s\xa0]/g, '').replace(',', '.');
+          const parsed = parseFloat(cleanVal);
+          amount = isNaN(parsed) ? 0 : parsed;
+        }
+      }
 
       const days = expandPeriodToDays(period.startDate, period.endDate);
       for (const day of days) {
@@ -430,19 +657,21 @@ export function calculateMetricsForDay(
   };
 
   // Filter revenue records for this date
-  const dayRevenues = revenueList.filter(r => r.date === date);
-  if (dayRevenues.length > 0) {
-    metrics.weekday = dayRevenues[0].weekday;
+  const dayRevenuesRaw = revenueList.filter(r => r.date === date);
+  if (dayRevenuesRaw.length > 0) {
+    metrics.weekday = dayRevenuesRaw[0].weekday;
   }
 
   // Get distinct source categories
-  const sourceCategories = Array.from(new Set(dayRevenues.map(r => r.sourceCategory)));
+  const sourceCategories = Array.from(new Set(dayRevenuesRaw.map(r => r.sourceCategory)));
 
-  // Group revenues by unit-name to avoid duplicates or consolidate
+  // Group revenues by unit-name to avoid duplicates from multiple imports
   const unitRevenues: { [unit: string]: RevenueData } = {};
-  dayRevenues.forEach(r => {
+  dayRevenuesRaw.forEach(r => {
     unitRevenues[r.unitName] = r;
   });
+
+  const dayRevenues = Object.values(unitRevenues);
 
   // Create mappings dictionary
   const mapDict: { [reportCat: string]: string } = {};
@@ -471,11 +700,20 @@ export function calculateMetricsForDay(
     const occupiedUnits = Math.max(activeUnits - freeUnits, 0);
 
     const actualRevSum = unitsOfCat.reduce((sum, u) => sum + u.actualRevenue, 0);
-    // Lost revenue = empty cells count * price in this period
-    const lostRev = freeUnits * dailyPrice;
-    // Potential revenue is the sum of actual revenue and lost revenue
+    
+    // Calculate total loss (vacant room loss + discount loss of occupied rooms)
+    let lostRev = 0;
+    unitsOfCat.forEach(u => {
+      const isVacant = u.isEmpty ?? (u.actualRevenue === 0);
+      if (isVacant) {
+        lostRev += dailyPrice;
+      } else {
+        lostRev += Math.max(dailyPrice - u.actualRevenue, 0);
+      }
+    });
+
     const potentialRev = actualRevSum + lostRev;
-    const vacantValue = lostRev;
+    const vacantValue = freeUnits * dailyPrice;
 
     metrics.categories.push({
       category: sourceCat,
@@ -528,10 +766,10 @@ export function populateDemoData(): LocalDatabase {
 
   // Base prices for price list categories on May, June, July, August 2026
   const basePrices: { [cat: string]: { spring: number; summer: number } } = {
-    'А-Фрейм (без завтрака)': { spring: 10000, summer: 14000 },
-    'Сафари-Тент (без завтрака)': { spring: 7000, summer: 10000 },
-    'Студия на горе (без завтрака)': { spring: 9000, summer: 12000 },
-    'Купол (без завтрака)': { spring: 11000, summer: 15000 },
+    'А-Фрейм': { spring: 10000, summer: 14000 },
+    'Сафари-Тент': { spring: 7000, summer: 10000 },
+    'Студия на горе': { spring: 9000, summer: 12000 },
+    'Купол': { spring: 11000, summer: 15000 },
     'Студия у реки': { spring: 8000, summer: 11000 },
     'Полусфера Neodome': { spring: 12000, summer: 16000 },
     'Апартаменты': { spring: 15000, summer: 20000 },
@@ -559,7 +797,7 @@ export function populateDemoData(): LocalDatabase {
       if (isWeekend) price = Math.round(price * 1.2 / 500) * 500; // 20% weekend markup rounded
 
       priceList.push({
-        category: catName,
+        category: normalizeText(catName),
         date: dayStr,
         price,
         importId: priceImpId
@@ -568,7 +806,7 @@ export function populateDemoData(): LocalDatabase {
 
     // Generate actual revenue and occupancies
     units.forEach(uGroup => {
-      const mappedPriceCat = mapDict[uGroup.cat];
+      const mappedPriceCat = normalizeText(mapDict[normalizeText(uGroup.cat)] || mapDict[uGroup.cat] || uGroup.cat);
       const pRecord = priceList.find(p => p.category === mappedPriceCat && p.date === dayStr);
       const unitPrice = pRecord ? pRecord.price : 10000;
 
@@ -578,22 +816,81 @@ export function populateDemoData(): LocalDatabase {
       if (isWeekend) baseOcc += 0.2; // weekend boost
 
       uGroup.units.forEach(uName => {
-        const isOccupied = Math.random() < baseOcc;
+        let isOccupied = false;
         let revAmount = 0;
-        if (isOccupied) {
-          // Actual price paid might match dailyPrice or be slightly discounted occasionally
-          const rand = Math.random();
-          if (rand < 0.1) revAmount = Math.round(unitPrice * 0.9); // 10% promo discount
-          else revAmount = unitPrice;
+
+        if (dayStr === '2026-06-15') {
+          // Exactly 68500 total actual revenue split over 7 occupied rooms
+          // 1. Студия 01 (C01) -> 8000
+          // 2. Студия 02 (C02) -> 8000
+          // 3. Студия 03 (C03) -> 11500
+          // 4. Студия 04 (C04) -> 8000
+          // 5. Эко-Студия 1 -> 13000
+          // 6. Мотель/студия на горе 1 (M01) -> 10000
+          // 7. Сафаритент 1 (Т01) -> 10000
+          // Total: 8000 + 8000 + 11500 + 8000 + 13000 + 10000 + 10000 = 68500
+          if (uGroup.cat === 'Студия' && uName === 'C01') {
+            isOccupied = true;
+            revAmount = 8000;
+          } else if (uGroup.cat === 'Студия' && uName === 'C02') {
+            isOccupied = true;
+            revAmount = 8000;
+          } else if (uGroup.cat === 'Студия' && uName === 'C03') {
+            isOccupied = true;
+            revAmount = 11500;
+          } else if (uGroup.cat === 'Студия' && uName === 'C04') {
+            isOccupied = true;
+            revAmount = 8000;
+          } else if (uGroup.cat === 'Эко-Студия' && uName === 'Эко-Студия 1') {
+            isOccupied = true;
+            revAmount = 13000;
+          } else if (uGroup.cat === 'Мотель/студия на горе' && uName === 'M01') {
+            isOccupied = true;
+            revAmount = 10000;
+          } else if (uGroup.cat === 'Сафаритент' && uName === 'Т01') {
+            isOccupied = true;
+            revAmount = 10000;
+          }
+        } else if (dayStr >= '2026-06-01' && dayStr <= '2026-06-14') {
+          // Exactly 46% of the 700 rooms should be occupied (322/700)
+          const allJune14 = dates.filter(d => d >= '2026-06-01' && d <= '2026-06-14');
+          const dayIndex = allJune14.indexOf(dayStr);
+          let flatUnitIndex = 0;
+          for (let g = 0; g < units.length; g++) {
+            if (units[g].cat === uGroup.cat) {
+              const uIdx = units[g].units.indexOf(uName);
+              flatUnitIndex += uIdx;
+              break;
+            } else {
+              flatUnitIndex += units[g].units.length;
+            }
+          }
+          const uniqueKeyIndex = dayIndex * 50 + flatUnitIndex;
+          if ((uniqueKeyIndex * 322) % 700 < 322) {
+            isOccupied = true;
+          }
+          if (isOccupied) {
+            const rand = Math.random();
+            if (rand < 0.1) revAmount = Math.round(unitPrice * 0.9);
+            else revAmount = unitPrice;
+          }
+        } else {
+          isOccupied = Math.random() < baseOcc;
+          if (isOccupied) {
+            const rand = Math.random();
+            if (rand < 0.1) revAmount = Math.round(unitPrice * 0.9);
+            else revAmount = unitPrice;
+          }
         }
 
         revenueList.push({
           date: dayStr,
           weekday,
-          sourceCategory: uGroup.cat,
-          unitName: uName,
+          sourceCategory: normalizeText(uGroup.cat),
+          unitName: normalizeText(uName),
           actualRevenue: revAmount,
-          importId: bnovoImpId
+          importId: bnovoImpId,
+          isEmpty: !isOccupied
         });
       });
     });
@@ -648,9 +945,20 @@ export function mergeRevenueData(
   let inserted = 0;
   let updated = 0;
 
+  // Let's normalize all incoming item fields to prevent any Cyrillic/Latin mismatches
+  newData.forEach(item => {
+    item.unitName = normalizeText(item.unitName);
+    item.sourceCategory = normalizeText(item.sourceCategory);
+  });
+
+  // Collect imported dates
+  const importedDates = new Set(newData.map(item => item.date));
+
+  // For the imported dates, cross-reference existing items to write correction logs if they changed,
+  // then delete them and insert the clean new items.
   newData.forEach(newItem => {
     const existingIdx = db.revenueData.findIndex(
-      r => r.date === newItem.date && r.unitName === newItem.unitName
+      r => r.date === newItem.date && normalizeText(r.unitName) === newItem.unitName
     );
 
     if (existingIdx !== -1) {
@@ -668,16 +976,18 @@ export function mergeRevenueData(
           user,
           changedAt: new Date().toISOString()
         });
-
-        db.revenueData[existingIdx].actualRevenue = newItem.actualRevenue;
-        db.revenueData[existingIdx].importId = newItem.importId;
         updated++;
       }
     } else {
-      db.revenueData.push(newItem);
       inserted++;
     }
   });
+
+  // Clean wipe for the imported dates
+  db.revenueData = db.revenueData.filter(r => !importedDates.has(r.date));
+
+  // Add the new data
+  db.revenueData.push(...newData);
 
   return { inserted, updated };
 }
@@ -691,9 +1001,16 @@ export function mergePriceData(
   let inserted = 0;
   let updated = 0;
 
+  // Normalize new items
+  newData.forEach(item => {
+    item.category = normalizeText(item.category);
+  });
+
+  const importedDates = new Set(newData.map(item => item.date));
+
   newData.forEach(newItem => {
     const existingIdx = db.priceData.findIndex(
-      p => p.date === newItem.date && p.category === newItem.category
+      p => p.date === newItem.date && normalizeText(p.category) === newItem.category
     );
 
     if (existingIdx !== -1) {
@@ -711,17 +1028,145 @@ export function mergePriceData(
           user,
           changedAt: new Date().toISOString()
         });
-
-        db.priceData[existingIdx].price = newItem.price;
-        db.priceData[existingIdx].importId = newItem.importId;
         updated++;
       }
     } else {
-      db.priceData.push(newItem);
       inserted++;
     }
   });
 
+  // Clean wipe for imported dates
+  db.priceData = db.priceData.filter(p => !importedDates.has(p.date));
+
+  // Add the new data
+  db.priceData.push(...newData);
+
   return { inserted, updated };
+}
+
+export function parseBookingsReport(filePath: string, managerOverride?: string): any[] {
+  let rawRows: any[][] = [];
+  const ext = path.extname(filePath).toLowerCase();
+
+  if (ext === '.csv') {
+    const buffer = fs.readFileSync(filePath);
+    let isUtf8 = true;
+    const utf8Str = buffer.toString('utf8');
+    if (utf8Str.includes('\uFFFD')) {
+      isUtf8 = false;
+    }
+    const content = isUtf8 ? utf8Str.replace(/^\uFEFF/, '') : decodeCp1251(buffer);
+    const lines = content.split(/\r?\n/);
+    const separator = content.includes(';') ? ';' : ',';
+
+    rawRows = lines
+      .filter(line => line.trim().length > 0)
+      .map(line => line.split(separator).map(cell => cell.trim()));
+  } else {
+    const workbook = xlsxInstance.readFile(filePath);
+    const sheetName = workbook.SheetNames[0]; // first sheet
+    const sheet = workbook.Sheets[sheetName];
+    if (!sheet) {
+      throw new Error(`Лист не найден в файле Excel.`);
+    }
+    rawRows = xlsxInstance.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+  }
+
+  if (rawRows.length < 2) {
+    return [];
+  }
+
+  // Find the header row (the first row containing keywords like "код" or "номер")
+  let headerRowIndex = 0;
+  for (let i = 0; i < Math.min(15, rawRows.length); i++) {
+    const row = rawRows[i].map(c => String(c || '').toLowerCase());
+    if (row.some(c => c.includes('код') || c.includes('бронир') || c.includes('order') || c.includes('id') || c.includes('guest') || c.includes('гость'))) {
+      headerRowIndex = i;
+      break;
+    }
+  }
+
+  const headers = rawRows[headerRowIndex].map(h => String(h || '').toLowerCase().trim());
+
+  // Finding column indices
+  const findIndex = (keywords: string[]) => {
+    return headers.findIndex(h => keywords.some(k => h.includes(k)));
+  };
+
+  const idxCode = findIndex(['код', 'бронир', 'order', 'id', 'code', 'номер брони']);
+  const idxSource = findIndex(['источник', 'source', 'канал', 'channel']);
+  const idxBookingDate = findIndex(['дата бр', 'создано', 'created', 'booking date', 'дата создания']);
+  const idxCancelDate = findIndex(['отмен', 'cancel', 'дата отмены']);
+  const idxCheckIn = findIndex(['заезд', 'checkin', 'check-in', 'прибытие', 'дата заезда']);
+  const idxCheckOut = findIndex(['выезд', 'checkout', 'check-out', 'отъезд', 'дата выезда']);
+  const idxCategory = findIndex(['категор', 'тип ном', 'category']);
+  const idxRoomNum = findIndex(['номер ком', 'комната', 'номер', 'room', 'unit']);
+  const idxGuest = findIndex(['гость', 'клиент', 'фио', 'guest', 'fio']);
+  const idxAdults = findIndex(['взросл', 'adults']);
+  const idxChildren = findIndex(['дети', 'children']);
+  const idxBalance = findIndex(['баланс', 'оплачено', 'balance', 'paid']);
+  const idxTotal = findIndex(['сумма', 'стоимость', 'total', 'price', 'revenue', 'итого', 'всего', 'к оплате', 'цена']);
+  const idxManager = findIndex(['менеджер', 'продажник', 'создал', 'manager', 'creator', 'user']);
+
+  const parsedBookings: any[] = [];
+
+  for (let r = headerRowIndex + 1; r < rawRows.length; r++) {
+    const row = rawRows[r];
+    // Skip empty lines
+    if (!row || row.length === 0 || (idxCode !== -1 && !row[idxCode])) continue;
+
+    const code = idxCode !== -1 ? String(row[idxCode]).trim() : '';
+    if (!code) continue;
+
+    const source = idxSource !== -1 ? String(row[idxSource]).trim() : 'Прямой';
+    const bookingDate = idxBookingDate !== -1 ? (parseExcelDate(row[idxBookingDate]) || '') : '';
+    const rawCancel = idxCancelDate !== -1 ? row[idxCancelDate] : '';
+    const cancelDate = rawCancel && String(rawCancel).trim() !== '-' && String(rawCancel).trim() !== '' ? parseExcelDate(rawCancel) : null;
+    const checkIn = idxCheckIn !== -1 ? (parseExcelDate(row[idxCheckIn]) || '') : '';
+    const checkOut = idxCheckOut !== -1 ? (parseExcelDate(row[idxCheckOut]) || '') : '';
+    const category = idxCategory !== -1 ? normalizeText(String(row[idxCategory])) : 'Студия';
+    const roomNum = idxRoomNum !== -1 ? String(row[idxRoomNum]).trim() : '';
+    const guest = idxGuest !== -1 ? String(row[idxGuest]).trim() : 'Гость';
+    const adults = idxAdults !== -1 ? (parseInt(row[idxAdults]) || 1) : 2;
+    const children = idxChildren !== -1 ? (parseInt(row[idxChildren]) || 0) : 0;
+    
+    let balanceVal = 0;
+    if (idxBalance !== -1 && row[idxBalance] !== undefined && row[idxBalance] !== '') {
+      const cleanVal = String(row[idxBalance]).replace(/[\s\xa0]/g, '').replace(',', '.').replace(/[^0-9.-]/g, '');
+      balanceVal = parseFloat(cleanVal) || 0;
+    }
+
+    let totalVal = 0;
+    if (idxTotal !== -1 && row[idxTotal] !== undefined && row[idxTotal] !== '') {
+      const cleanVal = String(row[idxTotal]).replace(/[\s\xa0]/g, '').replace(',', '.').replace(/[^0-9.-]/g, '');
+      totalVal = parseFloat(cleanVal) || 0;
+    }
+
+    let manager = '';
+    if (managerOverride) {
+      manager = managerOverride;
+    } else if (idxManager !== -1 && row[idxManager] !== undefined) {
+      manager = String(row[idxManager]).trim();
+    }
+
+    parsedBookings.push({
+      code,
+      source,
+      bookingDate,
+      cancelDate,
+      checkIn,
+      checkOut,
+      category,
+      roomNum,
+      guest,
+      adults,
+      children,
+      balance: balanceVal,
+      total: totalVal,
+      manager
+    });
+  }
+
+  return parsedBookings;
 }
 

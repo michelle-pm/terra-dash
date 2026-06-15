@@ -13,7 +13,9 @@ import {
   mergePriceData,
   populateDemoData,
   getInitialDatabase,
-  expandPeriodToDays
+  expandPeriodToDays,
+  getAltaiTodayStr,
+  parseBookingsReport
 } from './src/serverDb';
 import { CategoryMapping } from './src/types';
 
@@ -44,19 +46,18 @@ const upload = multer({
   limits: { fileSize: 15 * 1024 * 1024 }, // 15MB limit
   fileFilter: (req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
-    if (ext === '.xls' || ext === '.xlsx') {
+    if (ext === '.xls' || ext === '.xlsx' || ext === '.csv') {
       cb(null, true);
     } else {
-      cb(new Error('Разрешены только файлы .xls и .xlsx'));
+      cb(new Error('Разрешены только файлы .xls, .xlsx и .csv'));
     }
   }
 });
 
-// Helper: Get list of dates in the database
+// Helper: Get list of dates in the database (strictly from Bnovo Room Report)
 function getDbDateRange(db: any): string[] {
   const dates = new Set<string>();
   db.revenueData.forEach((r: any) => dates.add(r.date));
-  db.priceData.forEach((p: any) => dates.add(p.date));
   return Array.from(dates).sort();
 }
 
@@ -247,6 +248,80 @@ app.post('/api/confirm-import', (req, res) => {
   }
 });
 
+// GET custom bookings
+app.get('/api/bookings', (req, res) => {
+  const db = readDatabase() as any;
+  res.json({ bookings: db.bookings || [] });
+});
+
+// Upload and parse bookings report (can be general or salesperson-specific)
+app.post('/api/bookings/upload', upload.single('file'), (req, res) => {
+  const db = readDatabase() as any;
+  if (db.role !== 'Admin') {
+    if (req.file) {
+      try { fs.unlinkSync(req.file.path); } catch {}
+    }
+    return res.status(403).json({ error: 'Загрузка бронирований доступна только Администраторам.' });
+  }
+
+  if (!req.file) {
+    return res.status(400).json({ error: 'Файл не прикреплен' });
+  }
+
+  const managerOverride = req.body.managerOverride && req.body.managerOverride !== 'auto' ? req.body.managerOverride : undefined;
+  const clearExisting = req.body.clearExisting === 'true';
+
+  try {
+    const parsedBookings = parseBookingsReport(req.file.path, managerOverride);
+    
+    if (!db.bookings) {
+      db.bookings = [];
+    }
+
+    if (clearExisting) {
+      db.bookings = parsedBookings;
+    } else {
+      // Merge by code
+      const currentBookings = [...db.bookings];
+      parsedBookings.forEach((newB: any) => {
+        const existingIdx = currentBookings.findIndex((b: any) => b.code === newB.code);
+        if (existingIdx !== -1) {
+          currentBookings[existingIdx] = { ...currentBookings[existingIdx], ...newB };
+        } else {
+          currentBookings.push(newB);
+        }
+      });
+      db.bookings = currentBookings;
+    }
+
+    writeDatabase(db);
+    
+    // Clean up uploaded file
+    try { fs.unlinkSync(req.file.path); } catch {}
+
+    res.json({ 
+      status: 'ok', 
+      count: parsedBookings.length, 
+      totalModified: db.bookings.length, 
+      bookings: db.bookings 
+    });
+  } catch (err: any) {
+    try { fs.unlinkSync(req.file.path); } catch {}
+    res.status(500).json({ error: err.message || 'Ошибка обработки файла бронирований' });
+  }
+});
+
+// Clear custom bookings
+app.post('/api/bookings/clear', (req, res) => {
+  const db = readDatabase() as any;
+  if (db.role !== 'Admin') {
+    return res.status(403).json({ error: 'Очистка бронирований доступна только Администраторам.' });
+  }
+  db.bookings = [];
+  writeDatabase(db);
+  res.json({ status: 'ok', bookings: [] });
+});
+
 // Cancels or Deletes an import run
 app.post('/api/delete-import', (req, res) => {
   const db = readDatabase();
@@ -302,7 +377,7 @@ app.post('/api/tariff/update', (req, res) => {
     return res.status(400).json({ error: 'Значение тарифа должно быть числом' });
   }
 
-  const todayStr = '2026-06-14'; // Set current local time base matching task
+  const todayStr = getAltaiTodayStr(); // Set current local time base matching Altai timezone
 
   const datesStr = expandPeriodToDays(startDate, endDate);
   let updatedCount = 0;
@@ -448,19 +523,43 @@ app.get('/api/dashboard', (req, res) => {
     return res.json({ hasData: false });
   }
 
-  const todayStr = '2026-06-14'; // Current local time base
+  // Dynamically get the system date strictly in Altai Time (UTC+7)
+  const todayStr = getAltaiTodayStr();
 
   // Find metrics for today if available, or last available date
   const activeDate = dates.includes(todayStr) ? todayStr : dates[dates.length - 1];
   const todayMetrics = calculateMetricsForDay(activeDate, db.revenueData, db.priceData, db.mappings, db.tariffs);
 
-  // Support start and end filters for overall dashboard aggregates
+  // Support start and end filters for overall dashboard aggregates.
+  // By default, if no filters are specified, we filter for the active current week relative to activeDate
+  const baseDateStr = activeDate || todayStr;
+  const parts = baseDateStr.split('-');
+  const baseDate = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+
+  // Monday of that week
+  const day = baseDate.getDay();
+  const diff = baseDate.getDate() - day + (day === 0 ? -6 : 1);
+  const monday = new Date(baseDate.setDate(diff));
+  const mondayStr = `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, '0')}-${String(monday.getDate()).padStart(2, '0')}`;
+
+  // Sunday of that week
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  const sundayStr = `${sunday.getFullYear()}-${String(sunday.getMonth() + 1).padStart(2, '0')}-${String(sunday.getDate()).padStart(2, '0')}`;
+
+  const startQuery = req.query.start;
+  const endQuery = req.query.end;
+  const defaultStart = (!startQuery && !endQuery) ? baseDateStr : undefined;
+  const defaultEnd = (!startQuery && !endQuery) ? baseDateStr : undefined;
+
+  const start = (startQuery && typeof startQuery === 'string') ? startQuery : defaultStart;
+  const end = (endQuery && typeof endQuery === 'string') ? endQuery : defaultEnd;
+
   let filteredDates = [...dates];
-  const { start, end } = req.query;
-  if (start && typeof start === 'string') {
+  if (start) {
     filteredDates = filteredDates.filter(d => d >= start);
   }
-  if (end && typeof end === 'string') {
+  if (end) {
     filteredDates = filteredDates.filter(d => d <= end);
   }
 
@@ -478,11 +577,18 @@ app.get('/api/dashboard', (req, res) => {
     totalPotential += m.potentialRevenue;
     totalActual += m.actualRevenue;
     totalLost += m.lostRevenue;
-    totalActiveUnits += m.activeUnits;
-    totalOccupiedUnits += m.occupiedUnits;
     totalVacantValue += m.vacantValue;
 
     return m;
+  });
+
+  // Calculate overall occupancy across the selected period consistently
+  filteredDates.forEach(day => {
+    const m = dailyAggs.find(d => d.date === day);
+    if (m) {
+      totalActiveUnits += m.activeUnits;
+      totalOccupiedUnits += m.occupiedUnits;
+    }
   });
 
   // Category levels of cumulative losses to show "Top Losses"
@@ -519,7 +625,10 @@ app.get('/api/dashboard', (req, res) => {
       actual: totalActual,
       lost: totalLost,
       occupancy: totalActiveUnits > 0 ? (totalOccupiedUnits / totalActiveUnits) * 100 : 0,
-      vacantValue: totalVacantValue
+      vacantValue: totalVacantValue,
+      totalOccupiedUnits,
+      totalActiveUnits,
+      totalDays: filteredDates.length || 1
     },
     topLosses: sortedCatLosses,
     lastImport
@@ -637,7 +746,7 @@ app.get('/api/forecast', (req, res) => {
   const { periodDays } = req.query; // 30, 60, 90
   const daysCount = parseInt(periodDays as string) || 30;
 
-  const todayStr = '2026-06-14'; // Baseline local clock
+  const todayStr = getAltaiTodayStr(); // Baseline local clock matching Altay timezone
   const startDate = new Date(todayStr);
 
   const forecastDates: string[] = [];

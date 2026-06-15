@@ -1,5 +1,5 @@
 import { initializeApp } from "firebase/app";
-import { getAuth } from "firebase/auth";
+import { getDatabase } from "firebase/database";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAnM4nfGgyglPyE9lac5QJa1y0PvQMj7uc",
@@ -12,5 +12,5 @@ const firebaseConfig = {
   measurementId: "G-W3XKGE8PWH"
 };
 
-export const app = initializeApp(firebaseConfig);
-export const auth = getAuth(app);
+export const serverApp = initializeApp(firebaseConfig, "serverApp");
+export const serverRtdb = getDatabase(serverApp);

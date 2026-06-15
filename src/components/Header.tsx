@@ -1,5 +1,7 @@
-import React from 'react';
-import { Shield, Eye, RefreshCw, Layers, Database, Compass } from 'lucide-react';
+import React, { useState } from 'react';
+import { Shield, Eye, RefreshCw, Layers, Database, Compass, LogOut } from 'lucide-react';
+import { auth } from '../firebase';
+import { signOut } from 'firebase/auth';
 
 interface HeaderProps {
   role: 'Admin' | 'Viewer';
@@ -18,6 +20,18 @@ export default function Header({
   hasRevenue,
   hasPrices
 }: HeaderProps) {
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+
+  const handleLogout = async () => {
+    setIsLoggingOut(true);
+    try {
+      await signOut(auth);
+    } catch (e) {
+      console.error('Logout error', e);
+    }
+    setIsLoggingOut(false);
+  };
+
   return (
     <header className="sticky top-0 z-40 w-full border-b border-[#1F1F1F] bg-[#0A0A0A]/80 backdrop-blur-xl">
       <div className="mx-auto flex max-w-7xl h-16 items-center justify-between px-4 sm:px-6 lg:px-8">
@@ -98,6 +112,15 @@ export default function Header({
                 <span>Наблюдатель</span>
               </>
             )}
+          </button>
+          
+          <button
+            onClick={handleLogout}
+            disabled={isLoggingOut}
+            title="Выйти"
+            className="flex items-center justify-center p-2 rounded-lg border border-[#1F1F1F] bg-[#0F0F0F] text-zinc-400 hover:text-white hover:bg-red-500/10 hover:border-red-500/50 transition-all cursor-pointer"
+          >
+            <LogOut className="h-4 w-4" />
           </button>
         </div>
 

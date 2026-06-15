@@ -24,6 +24,19 @@ export default function TariffsScreen({
   const [isUpdating, setIsUpdating] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
 
+  const getAltaiTodayStr = () => {
+    const d = new Date();
+    const utcOffset = d.getTimezoneOffset() * 60000;
+    const utcTime = d.getTime() + utcOffset;
+    const altaiDate = new Date(utcTime + (7 * 3600000));
+    const yyyy = altaiDate.getFullYear();
+    const mm = String(altaiDate.getMonth() + 1).padStart(2, '0');
+    const dd = String(altaiDate.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  };
+
+  const todayStr = getAltaiTodayStr();
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!isAdmin) {
@@ -31,7 +44,6 @@ export default function TariffsScreen({
       return;
     }
 
-    const todayStr = '2026-06-14';
     if (startDate < todayStr) {
       setEditError('Невозможно редактировать тарифы за прошедшие даты. Прошлые периоды неизменяемы для аудита.');
       return;
@@ -114,7 +126,7 @@ export default function TariffsScreen({
                     value={startDate}
                     onChange={e => setStartDate(e.target.value)}
                     disabled={!isAdmin}
-                    min="2026-06-14"
+                    min={todayStr}
                     className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3.5 py-2 font-mono text-xs text-zinc-200 outline-none hover:border-zinc-700"
                   />
                 </div>

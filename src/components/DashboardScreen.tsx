@@ -1,6 +1,62 @@
 import React, { useState, useEffect } from 'react';
 import { TrendingUp, AlertTriangle, FileSpreadsheet, Percent, AlertCircle, ArrowUpRight, Ban, Zap } from 'lucide-react';
 
+const getTodayStr = () => {
+  const d = new Date();
+  // Altai is UTC+7
+  const utcOffset = d.getTimezoneOffset() * 60000;
+  const utcTime = d.getTime() + utcOffset;
+  const altaiDate = new Date(utcTime + (7 * 3600000));
+  const yyyy = altaiDate.getFullYear();
+  const mm = String(altaiDate.getMonth() + 1).padStart(2, '0');
+  const dd = String(altaiDate.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+};
+
+const getDatesForPeriod = (baseDateStr: string, periodType: 'day' | 'week' | 'month' | 'year' | 'custom') => {
+  const baseStr = baseDateStr || getTodayStr();
+  const parts = baseStr.split('-');
+  const yyyy = Number(parts[0]);
+  const mm = Number(parts[1]);
+  const dd = Number(parts[2]);
+  const base = new Date(yyyy, mm - 1, dd);
+
+  const formatDate = (date: Date) => {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const dStr = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${dStr}`;
+  };
+
+  switch (periodType) {
+    case 'day': {
+      const dayStr = formatDate(base);
+      return { start: dayStr, end: dayStr };
+    }
+    case 'week': {
+      const day = base.getDay();
+      // Monday of the week
+      const diff = base.getDate() - day + (day === 0 ? -6 : 1);
+      const monday = new Date(base.setDate(diff));
+      const sunday = new Date(monday);
+      sunday.setDate(monday.getDate() + 6);
+      return { start: formatDate(monday), end: formatDate(sunday) };
+    }
+    case 'month': {
+      const firstDay = new Date(base.getFullYear(), base.getMonth(), 1);
+      const lastDay = new Date(base.getFullYear(), base.getMonth() + 1, 0);
+      return { start: formatDate(firstDay), end: formatDate(lastDay) };
+    }
+    case 'year': {
+      const firstDay = new Date(base.getFullYear(), 0, 1);
+      const lastDay = new Date(base.getFullYear(), 11, 31);
+      return { start: formatDate(firstDay), end: formatDate(lastDay) };
+    }
+    default:
+      return { start: formatDate(base), end: formatDate(base) };
+  }
+};
+
 interface DashboardMetrics {
   hasData: boolean;
   activeDate?: string;
@@ -58,38 +114,39 @@ export default function DashboardScreen({
   hasPrices,
   unmappedCount
 }: DashboardScreenProps) {
-  const [period, setPeriod] = useState<'day' | 'week' | 'month' | 'custom'>('week');
-  const [start, setStart] = useState('2026-06-08');
-  const [end, setEnd] = useState('2026-06-14');
+  const [period, setPeriod] = useState<'day' | 'week' | 'month' | 'year' | 'custom'>('day');
+  const [start, setStart] = useState(() => {
+    const base = data?.activeDate || getTodayStr();
+    return getDatesForPeriod(base, 'day').start;
+  });
+  const [end, setEnd] = useState(() => {
+    const base = data?.activeDate || getTodayStr();
+    return getDatesForPeriod(base, 'day').end;
+  });
   const [localData, setLocalData] = useState<DashboardMetrics>(data);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     setLocalData(data);
+    if (data?.activeDate && period !== 'custom') {
+      const dates = getDatesForPeriod(data.activeDate, period);
+      setStart(dates.start);
+      setEnd(dates.end);
+    }
   }, [data]);
 
-  const handlePeriodChange = (newPeriod: 'day' | 'week' | 'month' | 'custom') => {
+  const handlePeriodChange = (newPeriod: 'day' | 'week' | 'month' | 'year' | 'custom') => {
     setPeriod(newPeriod);
-    let s = start;
-    let e = end;
-
-    if (newPeriod === 'day') {
-      s = '2026-06-14';
-      e = '2026-06-14';
-    } else if (newPeriod === 'week') {
-      s = '2026-06-08';
-      e = '2026-06-14';
-    } else if (newPeriod === 'month') {
-      s = '2026-06-01';
-      e = '2026-06-30';
+    if (newPeriod === 'custom') {
+      return;
     }
+
+    const base = data?.activeDate || getTodayStr();
+    const { start: s, end: e } = getDatesForPeriod(base, newPeriod);
 
     setStart(s);
     setEnd(e);
-
-    if (newPeriod !== 'custom') {
-      fetchFilteredData(s, e);
-    }
+    fetchFilteredData(s, e);
   };
 
   const handleCustomDateChange = (type: 'start' | 'end', value: string) => {
@@ -211,9 +268,10 @@ export default function DashboardScreen({
             Сводные финансовые показатели
           </h2>
           <p className="text-[11px] text-zinc-400 mt-1 font-normal">
-            {period === 'day' && 'За выбранный активный день: 14 июня 2026'}
-            {period === 'week' && 'По умолчанию: текущая неделя (08.06.2026 — 14.06.2026)'}
-            {period === 'month' && 'За текущий месяц: июнь 2026 (01.06.2026 — 30.06.2026)'}
+            {period === 'day' && `За выбранный активный день: ${start.split('-').reverse().join('.')}`}
+            {period === 'week' && `Текущая неделя с ${start.split('-').reverse().join('.')} по ${end.split('-').reverse().join('.')}`}
+            {period === 'month' && `За текущий месяц с ${start.split('-').reverse().join('.')} по ${end.split('-').reverse().join('.')}`}
+            {period === 'year' && `За текущий год с ${start.split('-').reverse().join('.')} по ${end.split('-').reverse().join('.')}`}
             {period === 'custom' && `Пользовательский период: с ${start.split('-').reverse().join('.')} по ${end.split('-').reverse().join('.')}`}
           </p>
         </div>
@@ -244,6 +302,14 @@ export default function DashboardScreen({
               }`}
             >
               Месяц
+            </button>
+            <button
+              onClick={() => handlePeriodChange('year')}
+              className={`px-3 py-1 rounded-md text-xs font-medium cursor-pointer transition-all ${
+                period === 'year' ? 'bg-red-600 text-white shadow' : 'text-zinc-400 hover:text-zinc-200'
+              }`}
+            >
+              Год
             </button>
             <button
               onClick={() => handlePeriodChange('custom')}
@@ -282,7 +348,7 @@ export default function DashboardScreen({
       </div>
       
       {/* 1. HERO MAIN METRIC FOR TODAY / CHOSEN DAY */}
-      {today && (
+      {overall && (
         <div className="relative overflow-hidden rounded-2xl border border-zinc-800 bg-gradient-to-r from-zinc-950 to-zinc-900 p-6 sm:p-8 shadow-xl">
           <div className="absolute top-0 right-0 h-40 w-40 bg-rose-500/5 rounded-full blur-3xl pointer-events-none"></div>
           <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-6">
@@ -296,9 +362,15 @@ export default function DashboardScreen({
               </h2>
               <div className="mt-3 flex items-baseline gap-2">
                 <span className="text-4xl sm:text-6xl font-extrabold tracking-tight text-rose-500 font-mono">
-                  {formatCurrency(today.lostRevenue)}
+                  {formatCurrency(overall.lost)}
                 </span>
-                <span className="text-xs sm:text-sm text-zinc-500 font-mono">заактивную дату {today.date}</span>
+                <span className="text-xs sm:text-sm text-zinc-500 font-mono ml-2">
+                  {period === 'day' && `за день ${start.split('-').reverse().join('.')}`}
+                  {period === 'week' && `за неделю c ${start.split('-').reverse().join('.')} по ${end.split('-').reverse().join('.')}`}
+                  {period === 'month' && `за месяц c ${start.split('-').reverse().join('.')} по ${end.split('-').reverse().join('.')}`}
+                  {period === 'year' && `за год c ${start.split('-').reverse().join('.')} по ${end.split('-').reverse().join('.')}`}
+                  {period === 'custom' && `за период c ${start.split('-').reverse().join('.')} по ${end.split('-').reverse().join('.')}`}
+                </span>
               </div>
               <p className="text-zinc-400 text-xs sm:text-sm mt-3 max-w-xl">
                 Упущенная выручка — это недозаработанные средства из-за пустующих объектов или продажи ниже прайс-листа. Рассчитано строго по тарифу дня.
@@ -309,23 +381,37 @@ export default function DashboardScreen({
             <div className="flex flex-col sm:flex-row items-center gap-4 sm:gap-6 rounded-xl border border-zinc-800 bg-zinc-900/55 p-4 sm:p-5 md:w-80">
               <div className="flex-1 w-full space-y-3">
                 <div className="flex justify-between text-xs">
-                  <span className="text-zinc-400">Загрузка сегодня:</span>
-                  <span className="text-emerald-400 font-semibold">{today.activeUnits > 0 ? Math.round((today.occupiedUnits / today.activeUnits) * 100) : 0}%</span>
+                  <span className="text-zinc-400">
+                    {period === 'day' ? 'Загрузка сегодня:' : 'Средняя загрузка:'}
+                  </span>
+                  <span className="text-emerald-400 font-semibold">{Math.round(overall.occupancy)}%</span>
                 </div>
                 <div className="h-2 w-full rounded-full bg-zinc-800 overflow-hidden">
                   <div 
                     className="h-full bg-emerald-500 rounded-full" 
-                    style={{ width: `${today.activeUnits > 0 ? (today.occupiedUnits / today.activeUnits) * 100 : 0}%` }}
+                    style={{ width: `${overall.occupancy}%` }}
                   />
                 </div>
                 <div className="grid grid-cols-2 gap-2 text-center pt-2 border-t border-zinc-800">
                   <div>
-                    <div className="text-[10px] text-zinc-500 uppercase tracking-widest font-mono">Занято</div>
-                    <div className="text-sm font-semibold text-zinc-300 font-mono">{today.occupiedUnits} / {today.activeUnits}</div>
+                    <div className="text-[10px] text-zinc-500 uppercase tracking-widest font-mono">
+                      {period === 'day' ? 'Занято' : 'Средняя занятость'}
+                    </div>
+                    <div className="text-sm font-semibold text-zinc-300 font-mono">
+                      {period === 'day' && today
+                        ? `${today.occupiedUnits} / ${today.activeUnits}`
+                        : `${Math.round(overall.totalOccupiedUnits / (overall.totalDays || 1))} / ${Math.round(overall.totalActiveUnits / (overall.totalDays || 1))}`}
+                    </div>
                   </div>
                   <div>
-                    <div className="text-[10px] text-zinc-500 uppercase tracking-widest font-mono">Свободно</div>
-                    <div className="text-sm font-semibold text-zinc-300 font-mono">{today.freeUnits}</div>
+                    <div className="text-[10px] text-zinc-500 uppercase tracking-widest font-mono">
+                      {period === 'day' ? 'Свободно' : 'Средний простой'}
+                    </div>
+                    <div className="text-sm font-semibold text-zinc-300 font-mono">
+                      {period === 'day' && today
+                        ? today.freeUnits
+                        : Math.round((overall.totalActiveUnits - overall.totalOccupiedUnits) / (overall.totalDays || 1))}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -443,20 +529,26 @@ export default function DashboardScreen({
           </div>
 
           {/* Today vacant inventories cost */}
-          {today && (
+          {overall && (
             <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-5">
               <div className="flex justify-between items-center mb-3">
-                <h3 className="text-sm font-semibold text-white">Стоимость пустующих объектов (сегодня)</h3>
-                <span className="text-xs text-amber-500 font-mono">{today.freeUnits} свободных объектов</span>
+                <h3 className="text-sm font-semibold text-white">
+                  {period === 'day' ? 'Стоимость пустующих объектов сегодня' : 'Кумулятивная стоимость простоя за период'}
+                </h3>
+                <span className="text-xs text-amber-500 font-mono">
+                  {period === 'day' && today ? `${today.freeUnits} свободных объектов` : 'По всему фонду'}
+                </span>
               </div>
               <div className="flex items-baseline gap-2 mb-3">
                 <span className="text-2xl font-bold text-zinc-200 font-mono">
-                  {formatCurrency(today.vacantValue)}
+                  {formatCurrency(period === 'day' && today ? today.vacantValue : overall.vacantValue)}
                 </span>
                 <span className="text-xs text-zinc-500">потеря в ценности из-за нулевой занятости</span>
               </div>
               <p className="text-xs text-zinc-500">
-                Сумма потенциально неполученных денег, если данные свободные номера останутся незаселенными до конца дня. Рассчитано перемножением свободных юнитов на тариф для каждого типа размещения.
+                {period === 'day' 
+                  ? 'Сумма потенциально неполученных денег, если данные свободные номера останутся незаселенными до конца дня. Рассчитано перемножением свободных юнитов на тариф.'
+                  : 'Сотни тысяч рублей, потерянные кумулятивно за выбранный период из-за простоя номеров без заселения. Рассчитано строго по тарифам пустующих дней.'}
               </p>
             </div>
           )}
