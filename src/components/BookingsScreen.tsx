@@ -100,6 +100,19 @@ export default function BookingsScreen() {
         body: formData,
       });
 
+      if (!res.ok) {
+        const textInfo = await res.text();
+        try {
+          const errJson = JSON.parse(textInfo);
+          throw new Error(errJson.error || 'Ошибка загрузки');
+        } catch (e) {
+          if (res.status === 413) {
+            throw new Error('Файл слишком велик. Максимальный размер 15 МБ.');
+          }
+          throw new Error(`Системная ошибка (${res.status}): Сервер недоступен или файл отклонен.`);
+        }
+      }
+
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.error || 'Ошибка при загрузке реестра');

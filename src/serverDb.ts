@@ -451,11 +451,10 @@ export function parseBnovoReport(filePath: string, fileName: string, uploadedBy:
       const rawVal = rData[col];
       
       const isEmptyCell = rawVal === '' || rawVal === null || rawVal === undefined || 
-        (typeof rawVal === 'string' && (rawVal.trim() === '' || rawVal.trim() === '0' || rawVal.trim() === '0,00' || rawVal.trim() === '0.00')) || 
-        rawVal === 0 || rawVal === '0';
+        (typeof rawVal === 'string' && (rawVal.trim() === '' || rawVal.trim() === '-' || rawVal.trim() === '–'));
 
       let amount = 0;
-      if (rawVal !== '' && rawVal !== null && rawVal !== undefined) {
+      if (!isEmptyCell) {
         if (typeof rawVal === 'number') {
           amount = rawVal;
         } else {
@@ -701,18 +700,21 @@ export function calculateMetricsForDay(
 
     const actualRevSum = unitsOfCat.reduce((sum, u) => sum + u.actualRevenue, 0);
     
-    // Calculate total loss (vacant room loss + discount loss of occupied rooms)
+    // Calculate total loss (vacant room loss)
     let lostRev = 0;
+    let potentialRev = 0;
+
     unitsOfCat.forEach(u => {
       const isVacant = u.isEmpty ?? (u.actualRevenue === 0);
+      
       if (isVacant) {
         lostRev += dailyPrice;
+        potentialRev += dailyPrice;
       } else {
-        lostRev += Math.max(dailyPrice - u.actualRevenue, 0);
+        potentialRev += u.actualRevenue; // The room is paid
       }
     });
 
-    const potentialRev = actualRevSum + lostRev;
     const vacantValue = freeUnits * dailyPrice;
 
     metrics.categories.push({
@@ -874,13 +876,18 @@ export function populateDemoData(): LocalDatabase {
             if (rand < 0.1) revAmount = Math.round(unitPrice * 0.9);
             else revAmount = unitPrice;
           }
-        } else {
+        } else if (dayStr < '2026-06-15') {
           isOccupied = Math.random() < baseOcc;
           if (isOccupied) {
             const rand = Math.random();
             if (rand < 0.1) revAmount = Math.round(unitPrice * 0.9);
             else revAmount = unitPrice;
           }
+        } else {
+          // Future dates should not have actual revenue in demo data 
+          // because it confuses the user ("bookings happen in real time").
+          isOccupied = false;
+          revAmount = 0;
         }
 
         revenueList.push({

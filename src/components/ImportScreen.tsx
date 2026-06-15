@@ -98,9 +98,18 @@ export default function ImportScreen({
       method: 'POST',
       body: formData
     })
-      .then(res => {
+      .then(async res => {
         if (!res.ok) {
-          return res.json().then(e => { throw new Error(e.error || 'Ошибка загрузки'); });
+          const textInfo = await res.text();
+          try {
+            const errJson = JSON.parse(textInfo);
+            throw new Error(errJson.error || 'Ошибка загрузки');
+          } catch (e) {
+            if (res.status === 413) {
+              throw new Error('Файл слишком велик. Максимальный размер 15 МБ.');
+            }
+            throw new Error(`Системная ошибка (${res.status}): Сервер недоступен или файл отклонен.`);
+          }
         }
         return res.json();
       })

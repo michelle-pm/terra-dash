@@ -1,6 +1,7 @@
 import express from 'express';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
 import multer from 'multer';
 import { createServer as createViteServer } from 'vite';
 import {
@@ -19,8 +20,8 @@ import {
 } from './src/serverDb';
 import { CategoryMapping } from './src/types';
 
-// Ensure uploads folder exists
-const UPLOADS_DIR = path.join(process.cwd(), 'uploads');
+// Ensure uploads folder exists in /tmp which is the only writable directory on Cloud Run
+const UPLOADS_DIR = path.join(os.tmpdir(), 'bnovo_uploads');
 if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 }
@@ -129,8 +130,21 @@ app.post('/api/mapping/update', (req, res) => {
   }
 });
 
+// Middleware to catch multer errors consistently
+const uploadMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  upload.single('file')(req, res, (err) => {
+    if (err) {
+      if (err instanceof multer.MulterError) {
+        return res.status(400).json({ error: `Ошибка загрузки файла: ${err.message}` });
+      }
+      return res.status(500).json({ error: `Внутренняя ошибка при загрузке: ${err.message}` });
+    }
+    next();
+  });
+};
+
 // File parser & transient preview route
-app.post('/api/upload', upload.single('file'), (req, res) => {
+app.post('/api/upload', uploadMiddleware, (req, res) => {
   const db = readDatabase();
   if (db.role !== 'Admin') {
     if (req.file) {
@@ -255,7 +269,7 @@ app.get('/api/bookings', (req, res) => {
 });
 
 // Upload and parse bookings report (can be general or salesperson-specific)
-app.post('/api/bookings/upload', upload.single('file'), (req, res) => {
+app.post('/api/bookings/upload', uploadMiddleware, (req, res) => {
   const db = readDatabase() as any;
   if (db.role !== 'Admin') {
     if (req.file) {
@@ -574,6 +588,7 @@ app.get('/api/dashboard', (req, res) => {
   // Let's summarize metrics day by day
   const dailyAggs = filteredDates.map(day => {
     const m = calculateMetricsForDay(day, db.revenueData, db.priceData, db.mappings, db.tariffs);
+
     totalPotential += m.potentialRevenue;
     totalActual += m.actualRevenue;
     totalLost += m.lostRevenue;
@@ -659,6 +674,8 @@ app.get('/api/analytics-metrics', (req, res) => {
 
   // Category breakdowns
   const catSummary: { [cat: string]: { potential: number; actual: number; lost: number; active: number; occupied: number } } = {};
+
+  const todayStr = getAltaiTodayStr();
 
   // Build timeline aggregates
   const groups: { [key: string]: typeof dailyMetrics } = {};
