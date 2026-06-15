@@ -1,10 +1,12 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useMemo } from 'react';
 import { UploadCloud, FileSpreadsheet, Check, AlertTriangle, Play, Trash2, Calendar, FileText, CheckCircle2 } from 'lucide-react';
-import { apiFetch } from '../lib/api';
-import { ImportRun } from '../types';
+import { ImportRun, RevenueData, PriceData } from '../types';
+import { parseBnovoReportFile, parsePriceListFile } from '../lib/clientImportParsers';
+import { auth, rtdb } from '../firebase';
 
 interface ImportScreenProps {
   importsList: ImportRun[];
+  dbState: any;
   isAdmin: boolean;
   onRefreshAll: () => void;
   onShowSuccessToast: (msg: string) => void;
@@ -12,6 +14,7 @@ interface ImportScreenProps {
 
 export default function ImportScreen({
   importsList,
+  dbState,
   isAdmin,
   onRefreshAll,
   onShowSuccessToast
@@ -20,22 +23,78 @@ export default function ImportScreen({
   const [dragActive, setDragActive] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const [activeDiagnostics, setActiveDiagnostics] = useState<any | null>(null);
 
-  // API health state
-  const [apiHealth, setApiHealth] = useState<{
-    online: boolean;
-    loading: boolean;
-    mode: string | null;
-    uploadUrl: string | null;
-    error: string | null;
-  }>({
-    online: false,
-    loading: true,
-    mode: null,
-    uploadUrl: null,
+  // Transient container for holding parsed data before confirmation
+  const [parsedDataToConfirm, setParsedDataToConfirm] = useState<{
+    fileType: 'yearly_revenue_report' | 'price_list';
+    parsedRevenue?: RevenueData[];
+    parsedPrices?: PriceData[];
+  } | null>(null);
+
+  // API health simulated mock data showing CPU client browser engine status
+  const apiHealth = {
+    online: true,
+    loading: false,
+    mode: 'Client-Engine',
+    uploadUrl: 'Браузер (FileReader)',
     error: null
-  });
+  };
+
+  // Live client-side calculation of database diagnostics
+  const activeDiagnostics = useMemo(() => {
+    const revs = dbState?.revenueData || [];
+    const uniqueDates = Array.from(new Set(revs.map((r: any) => r.date))).sort();
+    const uniqueUnits = Array.from(new Set(revs.map((r: any) => r.unitName))).sort();
+    const totalActual = revs.reduce((sum: number, r: any) => sum + (r.actualRevenue || 0), 0);
+    
+    const getRevenueForDate = (d: string) => {
+      return revs
+        .filter((r: any) => r.date === d)
+        .reduce((sum: number, r: any) => sum + (r.actualRevenue || 0), 0);
+    };
+
+    const val2026_06_15 = getRevenueForDate('2026-06-15');
+    const val2026_06_16 = getRevenueForDate('2026-06-16');
+    const val2026_06_21 = getRevenueForDate('2026-06-21');
+
+    const weekRevenue = revs
+      .filter((r: any) => r.date >= '2026-06-15' && r.date <= '2026-06-21')
+      .reduce((sum: number, r: any) => sum + (r.actualRevenue || 0), 0);
+
+    const monthRevenue = revs
+      .filter((r: any) => r.date >= '2026-06-01' && r.date <= '2026-06-30')
+      .reduce((sum: number, r: any) => sum + (r.actualRevenue || 0), 0);
+
+    const invalidUnitsList = uniqueUnits.filter((u: any) => {
+      const uLower = String(u || '').trim().toLowerCase();
+      return uLower === '0' || uLower === 'всего за проживание' || uLower.includes('итого') || uLower.includes('всего') || uLower.includes('сумма');
+    });
+
+    const sourceBnovo = dbState?.imports?.find((imp: any) => imp.fileType === 'yearly_revenue_report' && imp.status === 'confirmed');
+
+    return {
+      hasData: revs.length > 0,
+      sourceFile: sourceBnovo ? sourceBnovo.fileName : null,
+      physicalUnitsCount: uniqueUnits.length,
+      dateRowsCount: uniqueDates.length,
+      totalActualRevenue: totalActual,
+      dateRange: {
+        firstDate: uniqueDates[0] || null,
+        lastDate: uniqueDates[uniqueDates.length - 1] || null,
+      },
+      controls: {
+        date_2026_06_15: val2026_06_15,
+        date_2026_06_16: val2026_06_16,
+        date_2026_06_21: val2026_06_21,
+        week_2026_06_15_to_21: weekRevenue,
+        month_2026_06_01_to_30: monthRevenue,
+      },
+      hasInvalidUnits: invalidUnitsList.length > 0,
+      invalidUnits: invalidUnitsList,
+      reconciliationStatus: sourceBnovo ? 'confirmed' : 'missing_report',
+      allUnits: uniqueUnits,
+    };
+  }, [dbState]);
 
   // Preview panel of transient parse from server
   const [pendingPreview, setPendingPreview] = useState<{
@@ -51,48 +110,6 @@ export default function ImportScreen({
   } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    checkApiHealth();
-    fetchDiagnostics();
-  }, [importsList]);
-
-  const checkApiHealth = () => {
-    fetch('/api/health')
-      .then(async res => {
-        if (!res.ok) {
-          throw new Error(`Ошибка сервера: ${res.status}`);
-        }
-        return res.json();
-      })
-      .then(data => {
-        setApiHealth({
-          online: true,
-          loading: false,
-          mode: data.mode || 'development',
-          uploadUrl: data.uploadUrl || '/api/upload',
-          error: null
-        });
-      })
-      .catch(err => {
-        setApiHealth({
-          online: false,
-          loading: false,
-          mode: 'offline',
-          uploadUrl: '/api/upload',
-          error: err.message || 'Серверная часть приложения недоступна'
-        });
-      });
-  };
-
-  const fetchDiagnostics = () => {
-    apiFetch('/api/debug/revenue-check')
-      .then(res => res.json())
-      .then(data => {
-        setActiveDiagnostics(data);
-      })
-      .catch(err => console.error("Error loading diagnostics:", err));
-  };
 
   // File drag-and-drop triggers
   const handleDrag = (e: React.DragEvent) => {
@@ -125,7 +142,7 @@ export default function ImportScreen({
     fileInputRef.current?.click();
   };
 
-  // Upload file to Express API
+  // Local browser FileReader parser
   const uploadFile = async (file: File) => {
     if (!isAdmin) {
       setUploadError('Загрузка файлов доступна только администраторам.');
@@ -155,114 +172,135 @@ export default function ImportScreen({
     setIsUploading(true);
     setUploadError(null);
     setPendingPreview(null);
+    setParsedDataToConfirm(null);
 
-    // Add debug logging before upload
-    let hasToken = false;
     try {
-      const { auth } = await import('../firebase');
-      hasToken = !!auth.currentUser;
-    } catch (e) {
-      console.warn("Could not check firebase currentUser for debugging logs", e);
+      if (fileType === 'yearly_revenue_report') {
+        const result = await parseBnovoReportFile(file, auth.currentUser?.email || 'Администратор');
+        setPendingPreview({
+          importRun: result.importRun,
+          preview: result.preview
+        });
+        setParsedDataToConfirm({
+          fileType: 'yearly_revenue_report',
+          parsedRevenue: result.parsedRevenue
+        });
+        onShowSuccessToast('Файл Bnovo успешно считан. Проверьте данные и подтвердите импорт.');
+      } else {
+        const result = await parsePriceListFile(file, auth.currentUser?.email || 'Администратор');
+        setPendingPreview({
+          importRun: result.importRun,
+          preview: result.preview
+        });
+        setParsedDataToConfirm({
+          fileType: 'price_list',
+          parsedPrices: result.parsedPrices
+        });
+        onShowSuccessToast('Прайс-лист успешно считан. Проверьте данные и подтвердите импорт.');
+      }
+    } catch (err: any) {
+      console.error(err);
+      setUploadError(err.message || 'Сбой во время анализа файла.');
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  // Confirm and write parsed snapshots completely to Firebase Realtime Database
+  const confirmImport = async (importId: string) => {
+    if (!parsedDataToConfirm || !pendingPreview) return;
+    setIsUploading(true);
+    setUploadError(null);
+
+    try {
+      const { ref, get, set } = await import('firebase/database');
+
+      // Fetch existing DB snapshot
+      const snap = await get(ref(rtdb, 'properties/terra_altaya'));
+      const db = snap.exists() ? snap.val() : {};
+
+      if (!db.imports) db.imports = [];
+      if (!db.revenueData) db.revenueData = [];
+      if (!db.priceData) db.priceData = [];
+
+      // Create confirmed importRun
+      const importRun = {
+        ...pendingPreview.importRun,
+        status: 'confirmed' as const,
+        uploadedAt: new Date().toISOString()
+      };
+
+      // Set clean lists
+      db.imports = [...db.imports.filter((imp: any) => imp.id !== importId), importRun];
+
+      if (parsedDataToConfirm.fileType === 'yearly_revenue_report' && parsedDataToConfirm.parsedRevenue) {
+        db.revenueData = parsedDataToConfirm.parsedRevenue;
+      } else if (parsedDataToConfirm.fileType === 'price_list' && parsedDataToConfirm.parsedPrices) {
+        db.priceData = parsedDataToConfirm.parsedPrices;
+      }
+
+      // Mark demo data off
+      db.hasDemoData = false;
+
+      // Write direct replacement to database!
+      await set(ref(rtdb, 'properties/terra_altaya'), db);
+
+      setPendingPreview(null);
+      setParsedDataToConfirm(null);
+      onRefreshAll();
+      onShowSuccessToast('Импорт успешно завершен! Данные объединены и пересчитаны.');
+    } catch (err: any) {
+      console.error(err);
+      setUploadError(err.message || 'Ошибка слияния данных в Realtime Database');
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  // Cancel or delete an import from Realtime Database
+  const deleteImport = async (importId: string) => {
+    if (pendingPreview?.importRun.id === importId) {
+      setPendingPreview(null);
+      setParsedDataToConfirm(null);
+      return;
     }
 
-    console.log("=== ОТЛАДКА ПЕРЕД ЗАГРУЗКОЙ ===");
-    console.log(`selected file name: ${file.name}`);
-    console.log(`selected file type: ${file.type}`);
-    console.log(`selected import type: ${fileType}`);
-    console.log(`upload URL: /api/upload`);
-    console.log(`user role: ${isAdmin ? 'Admin' : 'Viewer'}`);
-    console.log(`has auth token: ${hasToken}`);
-    console.log(`/api/health result:`, apiHealth);
+    if (!confirm('Вы действительно хотите удалить этот импорт и очистить связанные данные?')) return;
 
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('fileType', fileType);
+    setIsUploading(true);
+    try {
+      const { ref, get, set } = await import('firebase/database');
 
-    apiFetch('/api/upload', {
-      method: 'POST',
-      body: formData
-    })
-      .then(async res => {
-        console.log("=== РЕЗУЛЬТАТ ЗАГРУЗКИ ФАЙЛА ===");
-        console.log(`Response status: ${res.status}`);
-        const contentType = res.headers.get("content-type") || "";
-        console.log(`Response content-type: ${contentType}`);
-
-        if (!res.ok) {
-          const textInfo = await res.text();
-          console.log(`Response body (error text):`, textInfo);
-
-          if (res.status === 404) {
-            throw new Error("API загрузки не найден. Серверная часть приложения не запущена или /api/upload не подключен.");
+      const snap = await get(ref(rtdb, 'properties/terra_altaya'));
+      if (snap.exists()) {
+        const db = snap.val();
+        
+        let fileTypeToDelete = '';
+        if (db.imports) {
+          const run = db.imports.find((imp: any) => imp.id === importId);
+          if (run) {
+            fileTypeToDelete = run.fileType;
           }
-          if (res.status === 403) {
-            throw new Error("Нет прав администратора.");
-          }
-          if (res.status === 413) {
-            throw new Error("Файл слишком большой.");
-          }
-
-          try {
-            const errJson = JSON.parse(textInfo);
-            throw new Error(errJson.error || `Ошибка загрузки (${res.status})`);
-          } catch (e) {
-            throw new Error(`Системная ошибка (${res.status}): Сервер недоступен или файл отклонен.`);
-          }
+          db.imports = db.imports.filter((imp: any) => imp.id !== importId);
         }
-        return res.json();
-      })
-      .then(data => {
-        setPendingPreview(data);
-        onRefreshAll();
-        onShowSuccessToast('Файл успешно считан. Проверьте данные и подтвердите импорт.');
-      })
-      .catch(err => {
-        setUploadError(err.message || 'Сбой во время анализа файла.');
-        console.error(err);
-      })
-      .finally(() => {
-        setIsUploading(false);
-      });
-  };
 
-  // Confirm and consolidate a pending import
-  const confirmImport = (importId: string) => {
-    apiFetch('/api/confirm-import', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ importId })
-    })
-      .then(res => res.json())
-      .then(data => {
-        if (data.error) throw new Error(data.error);
-        setPendingPreview(null);
-        onRefreshAll();
-        fetchDiagnostics();
-        onShowSuccessToast('Импорт успешно завершен! Данные объединены и пересчитаны.');
-      })
-      .catch(err => {
-        setUploadError(err.message || 'Ошибка слияния');
-      });
-  };
-
-  // Cancel or delete an import
-  const deleteImport = (importId: string) => {
-    if (!confirm('Вы действительно хотите удалить импорт? Все связанные данные будут полностью стерты.')) return;
-
-    apiFetch('/api/delete-import', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ importId })
-    })
-      .then(res => res.json())
-      .then(data => {
-        if (pendingPreview?.importRun.id === importId) {
-          setPendingPreview(null);
+        if (fileTypeToDelete === 'yearly_revenue_report') {
+          db.revenueData = [];
+        } else if (fileTypeToDelete === 'price_list') {
+          db.priceData = [];
         }
-        onRefreshAll();
-        fetchDiagnostics();
-        onShowSuccessToast('Импорт стерт.');
-      });
+
+        await set(ref(rtdb, 'properties/terra_altaya'), db);
+      }
+
+      onRefreshAll();
+      onShowSuccessToast('Импорт стерт.');
+    } catch (err: any) {
+      console.error(err);
+      setUploadError(err.message || 'Ошибка удаления импорта');
+    } finally {
+      setIsUploading(false);
+    }
   };
 
   const formatCurrency = (val: number) => {

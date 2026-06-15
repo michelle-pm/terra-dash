@@ -1,5 +1,6 @@
 import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
+import { getDatabase } from "firebase/database";
 
 const fallbackFirebaseConfig = {
   apiKey: "AIzaSyAnM4nfGgyglPyE9lac5QJa1y0PvQMj7uc",
@@ -66,3 +67,4 @@ export const isFirebaseConfigMissing = !firebaseConfig.apiKey;
 
 export const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
+export const rtdb = getDatabase(app);

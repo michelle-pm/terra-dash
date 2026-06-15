@@ -1,6 +1,8 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { ALL_BOOKINGS, MANAGERS, Booking, ManagerPerformance } from '../data/bookingData';
 import { apiFetch } from '../lib/api';
+import { parseBookingsFile } from '../lib/clientImportParsers';
+import { rtdb } from '../firebase';
 import { 
   Calendar, 
   DollarSign, 
@@ -42,6 +44,19 @@ export default function BookingsScreen() {
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [uploadMessage, setUploadMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
 
+  // Transient container for booking list before direct Firebase rewrite
+  const [pendingBookings, setPendingBookings] = useState<any[] | null>(null);
+  const [bookingsPreview, setBookingsPreview] = useState<{
+    fileName: string;
+    rawCount: number;
+    uniqueCount: number;
+    duplicates: string[];
+    managers: string[];
+    cancelledCount: number;
+    activeCount: number;
+    activeRevenue: number;
+  } | null>(null);
+
   // High-fidelity date helper: local date boundaries
   // All bookings are centered around early 2026 up to dynamic Altai Time today.
   const getAltaiTodayStr = () => {
@@ -66,10 +81,25 @@ export default function BookingsScreen() {
         const data = await res.json();
         if (data && Array.isArray(data.bookings)) {
           setDbBookings(data.bookings);
+          setIsLoading(false);
+          return;
         }
       }
     } catch (e) {
-      console.error('Error fetching custom bookings:', e);
+      console.error('Error fetching custom bookings from API:', e);
+    }
+
+    // Direct Firebase Client fallback
+    try {
+      const { ref, get } = await import('firebase/database');
+      const snap = await get(ref(rtdb, 'properties/terra_altaya/bookings'));
+      if (snap.exists() && Array.isArray(snap.val())) {
+        setDbBookings(snap.val());
+      } else {
+        setDbBookings([]);
+      }
+    } catch (fbErr) {
+      console.error('Direct bookings fetch failed too:', fbErr);
     } finally {
       setIsLoading(false);
     }
@@ -79,78 +109,153 @@ export default function BookingsScreen() {
     fetchBookings();
   }, []);
 
-  // Handle uploading files
+  // Run local excel/csv parser instantly inside user browser on selection
+  const runLocalBookingsParser = async (file: File) => {
+    setIsUploading(true);
+    setUploadMessage(null);
+    setBookingsPreview(null);
+    setPendingBookings(null);
+
+    try {
+      const parsed = await parseBookingsFile(file, uploadManager === 'auto' ? undefined : uploadManager);
+      if (parsed.length === 0) {
+        throw new Error('Файл не содержит бронирований или неверная структура.');
+      }
+
+      // Compute statistics
+      const codes = parsed.map(b => b.code);
+      const uniqueCodes = Array.from(new Set(codes));
+      
+      const seen = new Set<string>();
+      const duplicates = Array.from(new Set(codes.filter(c => {
+        if (seen.has(c)) return true;
+        seen.add(c);
+        return false;
+      })));
+
+      const managers = Array.from(new Set(parsed.map(b => b.manager || 'Внешний')));
+      const cancelledCount = parsed.filter(b => b.cancelDate !== null).length;
+      const activeCount = parsed.filter(b => b.cancelDate === null).length;
+      const activeRevenue = parsed
+        .filter(b => b.cancelDate === null)
+        .reduce((sum, b) => sum + (b.total || 0), 0);
+
+      setPendingBookings(parsed);
+      setBookingsPreview({
+        fileName: file.name,
+        rawCount: parsed.length,
+        uniqueCount: uniqueCodes.length,
+        duplicates,
+        managers,
+        cancelledCount,
+        activeCount,
+        activeRevenue
+      });
+
+      setUploadMessage({
+        type: 'success',
+        text: `Файл успешно проанализирован: обнаружено ${parsed.length} бронирований. Из них активных: ${activeCount}, отмененных: ${cancelledCount}. Пожалуйста, подтвердите сохранение в БД.`
+      });
+    } catch (err: any) {
+      console.error(err);
+      setUploadMessage({
+        type: 'error',
+        text: err.message || 'Ошибка во время чтения файла бронирований.'
+      });
+      setUploadFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  // Confirm and write to Firebase Database directly
   const handleUploadSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!uploadFile) {
-      setUploadMessage({ type: 'error', text: 'Пожалуйста, выберите файл.' });
+    if (!uploadFile || !pendingBookings) {
+      setUploadMessage({ type: 'error', text: 'Пожалуйста, сначала выберите и проанализируйте файл.' });
       return;
     }
 
     setIsUploading(true);
     setUploadMessage(null);
 
-    const formData = new FormData();
-    formData.append('file', uploadFile);
-    formData.append('managerOverride', uploadManager);
-    formData.append('clearExisting', String(clearExisting));
-
     try {
-      const res = await apiFetch('/api/bookings/upload', {
-        method: 'POST',
-        body: formData,
-      });
+      const { ref, get, set } = await import('firebase/database');
 
-      if (!res.ok) {
-        const textInfo = await res.text();
-        try {
-          const errJson = JSON.parse(textInfo);
-          throw new Error(errJson.error || 'Ошибка загрузки');
-        } catch (e) {
-          if (res.status === 413) {
-            throw new Error('Файл слишком велик. Максимальный размер 15 МБ.');
+      const path = 'properties/terra_altaya';
+      const snap = await get(ref(rtdb, path));
+      const db = snap.exists() ? snap.val() : {};
+
+      if (!db.bookings) {
+        db.bookings = [];
+      }
+
+      let resultBookings = [];
+      if (clearExisting) {
+        resultBookings = pendingBookings;
+      } else {
+        const currentBookings = [...db.bookings];
+        pendingBookings.forEach((newB: any) => {
+          const idx = currentBookings.findIndex((b: any) => b.code === newB.code);
+          if (idx !== -1) {
+            currentBookings[idx] = { ...currentBookings[idx], ...newB };
+          } else {
+            currentBookings.push(newB);
           }
-          throw new Error(`Системная ошибка (${res.status}): Сервер недоступен или файл отклонен.`);
-        }
+        });
+        resultBookings = currentBookings;
       }
 
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Ошибка при загрузке реестра');
-      }
+      // Record state back to Firebase RTDB
+      db.bookings = resultBookings;
+      await set(ref(rtdb, path), db);
 
       setUploadMessage({
         type: 'success',
-        text: `Успешно импортировано: ${data.count} строк. Всего в базе: ${data.totalModified} записей.`
+        text: `Данные успешно сохранены в Базу! Записано ${pendingBookings.length} строк. Всего в базе: ${resultBookings.length} бронирований.`
       });
+
       setUploadFile(null);
+      setPendingBookings(null);
+      setBookingsPreview(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
-      
-      // Refresh list
+
       fetchBookings();
     } catch (err: any) {
-      setUploadMessage({ type: 'error', text: err.message || 'Ошибка отправки файла' });
+      console.error(err);
+      setUploadMessage({
+        type: 'error',
+        text: err.message || 'Ошибка записи бронирований в Realtime Database.'
+      });
     } finally {
       setIsUploading(false);
     }
   };
 
-  // Revert back to system generated defaults
+  // Reset custom bookings back to empty standard fallbacks
   const handleClearBookings = async () => {
     if (!window.confirm('Вы уверены, что хотите сбросить импортированные бронирования и вернуться к демонстрационным данным?')) {
       return;
     }
+    setIsLoading(true);
     try {
-      const res = await apiFetch('/api/bookings/clear', { method: 'POST' });
-      if (res.ok) {
-        setDbBookings([]);
-        setUploadMessage({ type: 'success', text: 'Данные успешно сброшены к стандартному шаблону.' });
-      } else {
-        const data = await res.json();
-        throw new Error(data.error || 'Ошибка удаления');
+      const { ref, get, set } = await import('firebase/database');
+
+      const path = 'properties/terra_altaya';
+      const snap = await get(ref(rtdb, path));
+      if (snap.exists()) {
+        const db = snap.val();
+        db.bookings = [];
+        await set(ref(rtdb, path), db);
       }
+      
+      setDbBookings([]);
+      setUploadMessage({ type: 'success', text: 'Данные успешно сброшены к стандартному шаблону.' });
     } catch (err: any) {
-      alert(err.message || 'Ошибка сброса данных');
+      setUploadMessage({ type: 'error', text: err.message || 'Ошибка сброса данных' });
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -459,7 +564,16 @@ export default function BookingsScreen() {
                 type="file"
                 ref={fileInputRef}
                 accept=".xlsx,.xls,.csv"
-                onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
+                onChange={(e) => {
+                  const file = e.target.files?.[0] || null;
+                  setUploadFile(file);
+                  if (file) {
+                    runLocalBookingsParser(file);
+                  } else {
+                    setBookingsPreview(null);
+                    setPendingBookings(null);
+                  }
+                }}
                 className="w-full text-xs text-zinc-400 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-[11px] file:font-medium file:bg-zinc-900 file:text-zinc-200 hover:file:bg-zinc-800 file:transition-all cursor-pointer bg-zinc-909 border border-zinc-800 p-1.5 rounded-lg"
               />
             </div>
@@ -484,11 +598,11 @@ export default function BookingsScreen() {
           {/* Upload Button */}
           <button
             type="submit"
-            disabled={isUploading || !uploadFile}
+            disabled={isUploading || !uploadFile || !pendingBookings}
             className={`w-full py-2 px-4 rounded-lg text-xs font-semibold font-sans flex items-center justify-center gap-2 transition-all ${
-              isUploading || !uploadFile
+              isUploading || !uploadFile || !pendingBookings
                 ? 'bg-zinc-800 text-zinc-500 cursor-not-allowed'
-                : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-600/10'
+                : 'bg-[#533BF5] hover:bg-[#6852ff] text-white shadow-lg shadow-[#533BF5]/15'
             }`}
           >
             {isUploading ? (
@@ -518,6 +632,65 @@ export default function BookingsScreen() {
             Очистить всю текущую базу бронирований перед импортом (в перезапись)
           </label>
         </div>
+
+        {/* Bookings Preview Card */}
+        {bookingsPreview && (
+          <div className="rounded-xl border border-indigo-500/20 bg-indigo-950/10 p-4 space-y-3 font-mono text-xs">
+            <div className="flex justify-between items-center border-b border-zinc-800 pb-2">
+              <span className="text-[#818CF8] uppercase text-[10px] font-bold">Предварительный просмотр реестра</span>
+              <span className="text-zinc-400 text-[11px]">{bookingsPreview.fileName}</span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="bg-zinc-900/50 p-2.5 rounded border border-zinc-800">
+                <span className="text-zinc-500 uppercase text-[9px] font-bold block">Строк в файле</span>
+                <span className="font-semibold text-zinc-200 mt-1 block">{bookingsPreview.rawCount} строк</span>
+              </div>
+              <div className="bg-zinc-900/50 p-2.5 rounded border border-zinc-800">
+                <span className="text-zinc-500 uppercase text-[9px] font-bold block">Уникальные брони</span>
+                <span className="font-semibold text-zinc-200 mt-1 block">{bookingsPreview.uniqueCount} кодов</span>
+              </div>
+              <div className="bg-zinc-900/50 p-2.5 rounded border border-zinc-800">
+                <span className="text-zinc-500 uppercase text-[9px] font-bold block">Активные брони</span>
+                <span className="font-semibold text-zinc-200 mt-1 block">{bookingsPreview.activeCount} шт</span>
+              </div>
+              <div className="bg-zinc-900/50 p-2.5 rounded border border-zinc-800">
+                <span className="text-zinc-500 uppercase text-[9px] font-bold block">Отмененные брони</span>
+                <span className="font-semibold text-[#FF2D63] mt-1 block">{bookingsPreview.cancelledCount} шт</span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+              <div className="bg-zinc-900/50 p-2.5 rounded border border-zinc-800">
+                <span className="text-zinc-500 uppercase text-[9px] font-bold block">Выручка по активным броням</span>
+                <span className="font-semibold text-emerald-400 mt-1 block text-sm">
+                  {new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(bookingsPreview.activeRevenue)}
+                </span>
+              </div>
+              <div className="bg-zinc-900/50 p-2.5 rounded border border-zinc-800">
+                <span className="text-zinc-500 uppercase text-[9px] font-bold block">Обнаруженные продажники</span>
+                <div className="text-zinc-300 mt-1 text-[11px] font-sans flex flex-wrap gap-1 leading-normal">
+                  {bookingsPreview.managers.map((m, idx) => (
+                    <span key={idx} className="bg-zinc-800 px-1.5 py-0.5 rounded text-[10px] text-zinc-300 border border-zinc-700">{m}</span>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {bookingsPreview.duplicates.length > 0 && (
+              <div className="bg-rose-950/25 border border-rose-900/30 p-2.5 rounded text-rose-300 text-[11px]">
+                <span className="font-bold block uppercase text-[9px] tracking-wide text-rose-400 mb-1">Дубликаты номеров броней в файле:</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {bookingsPreview.duplicates.slice(0, 10).map((d, i) => (
+                    <span key={i} className="bg-rose-950/40 px-1.5 py-0.5 rounded text-[10px] border border-rose-900/45 text-rose-200 font-mono">{d}</span>
+                  ))}
+                  {bookingsPreview.duplicates.length > 10 && (
+                    <span className="text-zinc-500 text-[10px] self-center">...и еще {bookingsPreview.duplicates.length - 10} кодов</span>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Upload Messages */}
         {uploadMessage && (

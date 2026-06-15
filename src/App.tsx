@@ -445,6 +445,7 @@ export default function App() {
               {activeTab === 'import' && (
                 <ImportScreen
                   importsList={imports}
+                  dbState={dbState}
                   isAdmin={isAdmin}
                   onRefreshAll={refreshAllState}
                   onShowSuccessToast={showToast}
