@@ -81,36 +81,36 @@ export default function TariffsScreen({
   };
 
   return (
-    <div className="space-y-6 animate-fade-in">
+    <div className="space-y-6 animate-fade-in font-sans">
       
       {/* 1. HEADER TITLE */}
-      <div className="border-b border-zinc-800 pb-4">
-        <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+      <div className="border-b border-white/5 pb-4">
+        <h2 className="text-lg font-bold text-white flex items-center gap-2">
           <Settings className="h-5 w-5 text-zinc-400" />
           <span>Сетка тарифов (Tariff Override)</span>
         </h2>
-        <p className="text-xs text-zinc-500 mt-0.5">Оперативное ценообразование, ведение горячих акций и наценок на выходные дни.</p>
+        <p className="text-xs text-[#A1A1AA] mt-0.5 font-normal">Оперативное ценообразование, ведение горячих акций и наценок на выходные дни.</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         
         {/* Editor Form Panel */}
-        <div className="lg:col-span-2 rounded-xl border border-zinc-800 bg-zinc-950 p-5 space-y-4">
-          <h3 className="text-sm font-semibold text-white">Панель управления ценами будущего</h3>
+        <div className="lg:col-span-2 glass-panel rounded-2xl p-6 space-y-4">
+          <h3 className="text-sm font-bold text-white uppercase tracking-wider">Панель корректировки тарифов</h3>
 
-          <form onSubmit={handleSubmit} className="space-y-4 text-xs sm:text-sm text-zinc-350 font-sans">
+          <form onSubmit={handleSubmit} className="space-y-4 text-xs sm:text-sm text-zinc-300 font-sans">
             
             {/* Category Select */}
-            <div className="space-y-1.5Packed">
-              <label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider block">Категория отеля:</label>
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-[#A1A1AA] uppercase tracking-wider block">Категория отеля:</label>
               <select
                 value={selectedCategory}
                 onChange={e => setSelectedCategory(e.target.value)}
                 disabled={!isAdmin}
-                className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3.5 py-2 text-xs font-medium text-zinc-200 cursor-pointer outline-none hover:border-zinc-700"
+                className="w-full bg-zinc-950 border border-white/10 rounded-lg px-3.5 py-2.5 text-xs font-semibold text-white cursor-pointer outline-none focus:border-[#7C5CFF] hover:border-white/20"
               >
                 {categoriesList.map((cat, idx) => (
-                  <option key={idx} value={cat}>
+                  <option key={idx} value={cat} className="bg-zinc-950 text-white">
                     {cat}
                   </option>
                 ))}
@@ -120,53 +120,51 @@ export default function TariffsScreen({
             {/* Date limits */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider block">Начало диапазона (не ранее Сегодня):</label>
-                <div className="relative">
-                  <input
-                    type="date"
-                    value={startDate}
-                    onChange={e => setStartDate(e.target.value)}
-                    disabled={!isAdmin}
-                    min={todayStr}
-                    className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3.5 py-2 font-mono text-xs text-zinc-200 outline-none hover:border-zinc-700"
-                  />
-                </div>
+                <label className="text-xs font-bold text-[#A1A1AA] uppercase tracking-wider block">Начало диапазона (не ранее Сегодня):</label>
+                <input
+                  type="date"
+                  value={startDate}
+                  onChange={e => setStartDate(e.target.value)}
+                  disabled={!isAdmin}
+                  min={todayStr}
+                  className="w-full bg-zinc-950 border border-white/10 rounded-lg px-3.5 py-2.5 font-mono text-xs text-white outline-none focus:border-[#7C5CFF] hover:border-white/20 cursor-pointer"
+                />
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider block">Окончание диапазона:</label>
+                <label className="text-xs font-bold text-[#A1A1AA] uppercase tracking-wider block">Окончание диапазона:</label>
                 <input
                   type="date"
                   value={endDate}
                   onChange={e => setEndDate(e.target.value)}
                   disabled={!isAdmin}
-                  className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3.5 py-2 font-mono text-xs text-zinc-200 outline-none hover:border-zinc-700"
+                  className="w-full bg-zinc-950 border border-white/10 rounded-lg px-3.5 py-2.5 font-mono text-xs text-white outline-none focus:border-[#7C5CFF] hover:border-white/20 cursor-pointer"
                 />
               </div>
             </div>
 
             {/* Week/Weekend Mode Selector */}
             <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider block">Классификатор дней недели:</label>
-              <div className="grid grid-cols-3 gap-2 text-xs font-medium text-center">
+              <label className="text-xs font-bold text-[#A1A1AA] uppercase tracking-wider block">Классификатор дней недели:</label>
+              <div className="grid grid-cols-3 gap-2.5 text-xs font-bold text-center">
                 <button
                   type="button"
                   onClick={() => setMode('all')}
-                  className={`py-2 rounded-lg border transition-all cursor-pointer ${mode === 'all' ? 'border-amber-500/50 bg-amber-500/5 text-amber-500 shadow-inner' : 'border-zinc-800 bg-zinc-900/30 text-zinc-400 hover:border-zinc-700'}`}
+                  className={`py-2.5 rounded-lg border transition-all cursor-pointer ${mode === 'all' ? 'border-[#7C5CFF]/30 bg-[#7C5CFF]/15 text-[#7253fa] shadow-inner font-black' : 'border-white/10 bg-black/40 text-[#A1A1AA] hover:border-white/20'}`}
                 >
                   Все сутки
                 </button>
                 <button
                   type="button"
                   onClick={() => setMode('weekdays')}
-                  className={`py-2 rounded-lg border transition-all cursor-pointer ${mode === 'weekdays' ? 'border-amber-500/50 bg-amber-500/5 text-amber-500 shadow-inner' : 'border-zinc-800 bg-zinc-900/30 text-zinc-400 hover:border-zinc-700'}`}
+                  className={`py-2.5 rounded-lg border transition-all cursor-pointer ${mode === 'weekdays' ? 'border-[#7C5CFF]/30 bg-[#7C5CFF]/15 text-[#7253fa] shadow-inner font-black' : 'border-white/10 bg-black/40 text-[#A1A1AA] hover:border-white/20'}`}
                 >
                   Будни
                 </button>
                 <button
                   type="button"
                   onClick={() => setMode('weekends')}
-                  className={`py-2 rounded-lg border transition-all cursor-pointer ${mode === 'weekends' ? 'border-amber-500/50 bg-amber-500/5 text-amber-500 shadow-inner' : 'border-zinc-800 bg-zinc-900/30 text-zinc-400 hover:border-zinc-700'}`}
+                  className={`py-2.5 rounded-lg border transition-all cursor-pointer ${mode === 'weekends' ? 'border-[#7C5CFF]/30 bg-[#7C5CFF]/15 text-[#7253fa] shadow-inner font-black' : 'border-white/10 bg-black/40 text-[#A1A1AA] hover:border-white/20'}`}
                 >
                   Пятница/Суббота
                 </button>
@@ -176,26 +174,26 @@ export default function TariffsScreen({
             {/* Arithmetic Action Setting */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 items-end pt-1">
               <div className="col-span-2 space-y-1.5">
-                <label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider block">Действие над прайсом:</label>
-                <div className="grid grid-cols-3 gap-1 rounded-lg border border-zinc-800 bg-zinc-900/40 p-0.5 text-xs text-center font-semibold">
+                <label className="text-xs font-bold text-[#A1A1AA] uppercase tracking-wider block">Действие над прайсом:</label>
+                <div className="grid grid-cols-3 gap-1 rounded-lg border border-white/10 bg-zinc-950 p-0.5 text-xs text-center font-bold">
                   <button
                     type="button"
                     onClick={() => setAction('set')}
-                    className={`py-1.5 rounded cursor-pointer ${action === 'set' ? 'bg-zinc-800 text-zinc-100 shadow' : 'text-zinc-500 hover:text-zinc-300'}`}
+                    className={`py-2 rounded cursor-pointer transition-all ${action === 'set' ? 'bg-[#7C5CFF] text-white shadow-lg' : 'text-[#71717A] hover:text-[#A1A1AA]'}`}
                   >
                     Задать
                   </button>
                   <button
                     type="button"
                     onClick={() => setAction('increase')}
-                    className={`py-1.5 rounded cursor-pointer ${action === 'increase' ? 'bg-zinc-800 text-zinc-100 shadow' : 'text-zinc-500 hover:text-zinc-300'}`}
+                    className={`py-2 rounded cursor-pointer transition-all ${action === 'increase' ? 'bg-[#7C5CFF] text-white shadow-lg' : 'text-[#71717A] hover:text-[#A1A1AA]'}`}
                   >
                     + Руб
                   </button>
                   <button
                     type="button"
                     onClick={() => setAction('decrease')}
-                    className={`py-1.5 rounded cursor-pointer ${action === 'decrease' ? 'bg-zinc-800 text-zinc-100 shadow' : 'text-zinc-500 hover:text-zinc-300'}`}
+                    className={`py-2 rounded cursor-pointer transition-all ${action === 'decrease' ? 'bg-[#7C5CFF] text-white shadow-lg' : 'text-[#71717A] hover:text-[#A1A1AA]'}`}
                   >
                     - Руб
                   </button>
@@ -203,19 +201,19 @@ export default function TariffsScreen({
               </div>
 
               <div className="col-span-2 space-y-1.5">
-                <label className="text-xs font-semibold text-zinc-400 uppercase tracking-wider block">Значение (Руб):</label>
+                <label className="text-xs font-semibold text-[#A1A1AA] uppercase tracking-wider block">Значение (Руб):</label>
                 <input
                   type="number"
                   value={amount}
                   onChange={e => setAmount(parseInt(e.target.value) || 0)}
                   disabled={!isAdmin}
-                  className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3.5 py-2 font-mono text-xs text-zinc-200 outline-none hover:border-zinc-700"
+                  className="w-full bg-zinc-950 border border-white/10 rounded-lg px-3.5 py-2 font-mono text-xs text-white outline-none focus:border-[#7C5CFF] hover:border-white/20"
                 />
               </div>
             </div>
 
             {editError && (
-              <p className="text-rose-500 text-xs font-semibold bg-rose-500/10 p-2.5 rounded-lg border border-rose-500/15">{editError}</p>
+              <p className="text-[#FF2D63] text-xs font-semibold bg-[#FF2D63]/10 p-2.5 rounded-lg border border-[#FF2D63]/25">{editError}</p>
             )}
 
             {/* Submit save button */}
@@ -223,10 +221,10 @@ export default function TariffsScreen({
               <button
                 type="submit"
                 disabled={isUpdating}
-                className="w-full mt-4 flex items-center justify-center gap-2 rounded-lg bg-zinc-100 hover:bg-zinc-200 text-zinc-950 font-bold py-2.5 transition-all text-xs cursor-pointer shadow-lg shadow-black/15"
+                className="w-full mt-4 flex items-center justify-center gap-2 rounded-xl bg-[#7C5CFF] hover:bg-[#6a4bf5] text-white font-bold py-3 transition-all text-xs cursor-pointer shadow-lg shadow-[#7C5CFF]/15 disabled:opacity-50"
               >
                 <Save className="h-4 w-4" />
-                <span>Применить изменение в Сетку Сейфа</span>
+                <span>Применить изменения в системе тарифов</span>
               </button>
             )}
 
@@ -235,26 +233,35 @@ export default function TariffsScreen({
 
         {/* Informative Side Card */}
         <div className="space-y-6">
-          <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-5 space-y-4">
-            <h3 className="text-sm font-semibold text-white flex items-center gap-2 border-b border-zinc-800 pb-2">
-              <Info className="h-4 w-4 text-zinc-400" />
+          <div className="glass-panel rounded-2xl p-6 space-y-4">
+            <h3 className="text-sm font-bold text-white flex items-center gap-2 border-b border-white/5 pb-2 uppercase tracking-wide">
+              <Info className="h-4.5 w-4.5 text-zinc-450" />
               <span>Правила Изменения</span>
             </h3>
 
-            <div className="space-y-3.5 text-xs text-zinc-400 leading-relaxed">
-              <div className="flex gap-2">
-                <span className="text-amber-500 font-bold font-mono">01</span>
-                <p><strong>Ретроспективная заморозка</strong>. Все изменения тарифов за прошедшие даты заблокированы. Прошлые дни являются предметом объективного финансового аудита.</p>
+            <div className="space-y-4 text-xs text-[#A1A1AA] leading-relaxed font-normal font-sans">
+              <div className="flex gap-2.5">
+                <span className="text-[#7C5CFF] font-bold font-mono">01</span>
+                <div>
+                  <h4 className="font-bold text-white">Ретроспективная заморозка</h4>
+                  <p className="mt-0.5">Все изменения тарифов за прошедшие даты заблокированы. Прошлые дни являются предметом объективного финансового аудита.</p>
+                </div>
               </div>
 
-              <div className="flex gap-2">
-                <span className="text-amber-500 font-bold font-mono">02</span>
-                <p><strong>Журналирование действий</strong>. Каждое изменение отслеживается, создавая запись в "Истории корректировок" с точным указанием пользователя, времени, старой и новой цены.</p>
+              <div className="flex gap-2.5">
+                <span className="text-[#7C5CFF] font-bold font-mono">02</span>
+                <div>
+                  <h4 className="font-bold text-white">Журналирование действий</h4>
+                  <p className="mt-0.5">Каждое изменение отслеживается, создавая запись в истории корректировок с указанием пользователя, времени, старой и новой цены.</p>
+                </div>
               </div>
 
-              <div className="flex gap-2">
-                <span className="text-amber-500 font-bold font-mono">03</span>
-                <p><strong>Немедленный эффект</strong>. Календарь, аналитические срезы и прогноз упущенной выгоды (потенциальной упущенной выручки) моментально обновляются по окончании операции.</p>
+              <div className="flex gap-2.5">
+                <span className="text-[#7C5CFF] font-bold font-mono">03</span>
+                <div>
+                  <h4 className="font-bold text-white">Немедленный эффект</h4>
+                  <p className="mt-0.5">Календарь, аналитические срезы и расчет упущенной выручки моментально обновляются по окончании операции.</p>
+                </div>
               </div>
             </div>
           </div>

@@ -78,6 +78,9 @@ interface DashboardMetrics {
     lost: number;
     occupancy: number;
     vacantValue: number;
+    totalOccupiedUnits: number;
+    totalActiveUnits: number;
+    totalDays: number;
   };
   topLosses?: Array<{
     category: string;
@@ -182,7 +185,7 @@ export default function DashboardScreen({
   // 1. Check if both reports and price list are completely empty
   if (!localData?.hasData) {
     return (
-      <div className="mx-auto max-w-4xl px-4 py-16 text-center">
+      <div className="mx-auto max-w-4xl px-4 py-16 text-center font-sans">
         <div className="relative inline-flex h-20 w-20 items-center justify-center rounded-2xl bg-zinc-900 border border-zinc-800 shadow-xl mb-6">
           <Ban className="h-10 w-10 text-rose-500/80" />
           <div className="absolute inset-0 rounded-2xl bg-rose-500/5 blur-md"></div>
@@ -190,28 +193,28 @@ export default function DashboardScreen({
         <h2 className="text-2xl font-bold tracking-tight text-white mb-2">
           База данных пуста
         </h2>
-        <p className="text-zinc-400 max-w-lg mx-auto text-sm sm:text-base mb-8">
+        <p className="text-[#A1A1AA] max-w-lg mx-auto text-sm sm:text-base mb-8">
           Управление доходами рассчитывает упущенные финансовые средства в реальном времени. Для старта импортируйте годовой отчет Bnovo и прайс-лист курорта.
         </p>
 
         {/* Status Checkcards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-lg mx-auto mb-8 text-left">
-          <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-sm">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-lg mx-auto mb-8 text-left font-sans">
+          <div className="p-4 rounded-xl border border-white/5 bg-black/40 backdrop-blur-sm">
             <div className="flex justify-between items-start mb-2">
-              <span className="text-xs font-mono text-zinc-500">ОТЧЕТ</span>
+              <span className="text-xs font-mono text-[#71717A]">ОТЧЕТ</span>
               <span className="text-rose-500 text-xs font-medium">Ожидание</span>
             </div>
             <h3 className="text-sm font-semibold text-zinc-300">Годовой отчет Bnovo (.xls)</h3>
-            <p className="text-xs text-zinc-500 mt-1">Содержит ежедневную фактическую выручку по всем эко-объектам.</p>
+            <p className="text-xs text-[#71717A] mt-1">Содержит ежедневную фактическую выручку по всем эко-объектам.</p>
           </div>
 
-          <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-sm">
+          <div className="p-4 rounded-xl border border-white/5 bg-black/40 backdrop-blur-sm">
             <div className="flex justify-between items-start mb-2">
-              <span className="text-xs font-mono text-zinc-500">ТАРИФЫ</span>
+              <span className="text-xs font-mono text-[#71717A]">ТАРИФЫ</span>
               <span className="text-rose-500 text-xs font-medium">Ожидание</span>
             </div>
             <h3 className="text-sm font-semibold text-zinc-300">Прайслист Терра Алтая (.xlsx)</h3>
-            <p className="text-xs text-zinc-500 mt-1">Определяет эталонную сезонную стоимость проживания.</p>
+            <p className="text-xs text-[#71717A] mt-1">Определяет эталонную сезонную стоимость проживания.</p>
           </div>
         </div>
 
@@ -236,7 +239,7 @@ export default function DashboardScreen({
 
   // 2. Extract active day data
   const today = localData?.todayMetrics;
-  const overall = localData?.overall || { potential: 0, actual: 0, lost: 0, occupancy: 0, vacantValue: 0 };
+  const overall = localData?.overall || { potential: 0, actual: 0, lost: 0, occupancy: 0, vacantValue: 0, totalOccupiedUnits: 0, totalActiveUnits: 0, totalDays: 1 };
 
   // Compute what requires attention list
   const attentionItems: string[] = [];
@@ -260,264 +263,295 @@ export default function DashboardScreen({
   }
 
   return (
-    <div className="space-y-6 font-medium">
+    <div className="space-y-6">
       
-      {/* 0. PERIOD SELECTOR HEADER */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 p-4 rounded-xl border border-zinc-800 bg-zinc-950/40 backdrop-blur-sm shadow-sm">
+      {/* HUD HEADER: TITLE & FILE STATUS SETUP */}
+      <div className="glass-panel rounded-2xl p-6 flex flex-col xl:flex-row xl:items-center justify-between gap-6">
         <div>
-          <h2 className="text-base font-bold text-white tracking-tight">
-            Сводные финансовые показатели
-          </h2>
-          <p className="text-[11px] text-zinc-400 mt-1 font-normal">
-            {period === 'day' && `За выбранный активный день: ${start.split('-').reverse().join('.')}`}
-            {period === 'week' && `Текущая неделя с ${start.split('-').reverse().join('.')} по ${end.split('-').reverse().join('.')}`}
-            {period === 'month' && `За текущий месяц с ${start.split('-').reverse().join('.')} по ${end.split('-').reverse().join('.')}`}
-            {period === 'year' && `За текущий год с ${start.split('-').reverse().join('.')} по ${end.split('-').reverse().join('.')}`}
-            {period === 'custom' && `Пользовательский период: с ${start.split('-').reverse().join('.')} по ${end.split('-').reverse().join('.')}`}
+          <div className="flex items-center gap-2">
+            <span className="h-2 w-2 rounded-full bg-[#7C5CFF] animate-pulse shadow-[0_0_10px_#7C5CFF]" />
+            <span className="font-mono text-[10px] sm:text-xs tracking-widest text-[#A1A1AA] uppercase">Revenue Cockpit</span>
+          </div>
+          <h1 className="text-xl sm:text-2xl font-extrabold tracking-tight text-white uppercase mt-1">
+            Terra Altaya <span className="text-[#A1A1AA] font-light font-sans">Intelligence</span>
+          </h1>
+          <p className="text-[11px] text-[#A1A1AA] mt-1.5 font-normal font-sans">
+            {period === 'day' && `Аудит за день: ${start.split('-').reverse().join('.')}`}
+            {period === 'week' && `Интервал недели: с ${start.split('-').reverse().join('.')} по ${end.split('-').reverse().join('.')}`}
+            {period === 'month' && `Интервал месяца: с ${start.split('-').reverse().join('.')} по ${end.split('-').reverse().join('.')}`}
+            {period === 'year' && `Годовой интервал: с ${start.split('-').reverse().join('.')} по ${end.split('-').reverse().join('.')}`}
+            {period === 'custom' && `Особый период: c ${start.split('-').reverse().join('.')} по ${end.split('-').reverse().join('.')}`}
           </p>
         </div>
 
+        {/* File statuses */}
         <div className="flex flex-wrap items-center gap-3">
-          {/* Period type buttons */}
-          <div className="inline-flex bg-zinc-900 rounded-lg p-1 border border-zinc-800 h-9 items-center">
-            <button
-              onClick={() => handlePeriodChange('day')}
-              className={`px-3 py-1 rounded-md text-xs font-medium cursor-pointer transition-all ${
-                period === 'day' ? 'bg-red-600 text-white shadow' : 'text-zinc-400 hover:text-zinc-200'
-              }`}
-            >
-              День
-            </button>
-            <button
-              onClick={() => handlePeriodChange('week')}
-              className={`px-3 py-1 rounded-md text-xs font-medium cursor-pointer transition-all ${
-                period === 'week' ? 'bg-red-600 text-white shadow' : 'text-zinc-400 hover:text-zinc-200'
-              }`}
-            >
-              Неделя
-            </button>
-            <button
-              onClick={() => handlePeriodChange('month')}
-              className={`px-3 py-1 rounded-md text-xs font-medium cursor-pointer transition-all ${
-                period === 'month' ? 'bg-red-600 text-white shadow' : 'text-zinc-400 hover:text-zinc-200'
-              }`}
-            >
-              Месяц
-            </button>
-            <button
-              onClick={() => handlePeriodChange('year')}
-              className={`px-3 py-1 rounded-md text-xs font-medium cursor-pointer transition-all ${
-                period === 'year' ? 'bg-red-600 text-white shadow' : 'text-zinc-400 hover:text-zinc-200'
-              }`}
-            >
-              Год
-            </button>
-            <button
-              onClick={() => handlePeriodChange('custom')}
-              className={`px-3 py-1 rounded-md text-xs font-medium cursor-pointer transition-all ${
-                period === 'custom' ? 'bg-red-600 text-white shadow' : 'text-zinc-400 hover:text-zinc-200'
-              }`}
-            >
-              Свой период
-            </button>
+          <div className="flex items-center gap-2 bg-black/60 border border-white/5 rounded-full px-3 py-1.5 text-xs">
+            <span className={`h-1.5 w-1.5 rounded-full ${hasRevenue ? 'bg-[#00E09D]' : 'bg-[#FF2D63]'}`} />
+            <span className="text-[#A1A1AA] font-medium font-sans">Bnovo:</span>
+            <span className={`${hasRevenue ? 'text-[#00E09D]' : 'text-[#FF2D63]'} font-bold font-sans`}>
+              {hasRevenue ? 'Активен' : 'Отсутствует'}
+            </span>
           </div>
 
-          {/* Datepickers showing under Custom mode */}
+          <div className="flex items-center gap-2 bg-black/60 border border-white/5 rounded-full px-3 py-1.5 text-xs">
+            <span className={`h-1.5 w-1.5 rounded-full ${hasPrices ? 'bg-[#00E09D]' : 'bg-[#FF2D63]'}`} />
+            <span className="text-[#A1A1AA] font-medium font-sans">Прайслист:</span>
+            <span className={`${hasPrices ? 'text-[#00E09D]' : 'text-[#FF2D63]'} font-bold font-sans`}>
+              {hasPrices ? 'Активен' : 'Отсутствует'}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2 bg-black/60 border border-white/5 rounded-full px-3 py-1.5 text-xs">
+            <span className={`h-1.5 w-1.5 rounded-full ${hasRevenue && hasPrices ? 'bg-[#00E09D]' : 'bg-[#FF2D63]'}`} />
+            <span className="text-[#A1A1AA] font-medium font-sans">Бронирования:</span>
+            <span className={`${hasRevenue && hasPrices ? 'text-[#00E09D]' : 'text-[#FF2D63]'} font-bold font-sans`}>
+              {hasRevenue && hasPrices ? 'Активно' : 'Ожидание'}
+            </span>
+          </div>
+
+          {localData?.lastImport && (
+            <div className="text-[11px] text-[#A1A1AA] bg-white/5 px-3 py-1.5 rounded-full border border-white/10 font-mono">
+              Импорт: <span className="text-[#F8FAFC]">{new Date(localData.lastImport.uploadedAt).toLocaleDateString('ru-RU')}</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* PERIOD & RANGE FILTERS BAR */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-4 rounded-xl border border-white/5 bg-black/40 backdrop-blur-md">
+        <span className="text-xs font-semibold text-[#A1A1AA] uppercase font-mono tracking-wider font-sans">Настройка горизонта</span>
+        
+        <div className="flex flex-wrap items-center gap-3 font-sans">
+          {/* Period Selection Pill group */}
+          <div className="inline-flex bg-white/5 rounded-lg p-1 border border-white/10 h-9 items-center font-sans font-medium">
+            {(['day', 'week', 'month', 'year', 'custom'] as const).map((p) => (
+              <button
+                key={p}
+                onClick={() => handlePeriodChange(p)}
+                className={`px-3 py-1 rounded-md text-xs font-semibold cursor-pointer transition-all ${
+                  period === p ? 'bg-[#7C5CFF] text-white shadow-lg shadow-[#7C5CFF]/10' : 'text-[#A1A1AA] hover:text-[#FFFFFF]'
+                }`}
+              >
+                {p === 'day' && 'День'}
+                {p === 'week' && 'Неделя'}
+                {p === 'month' && 'Месяц'}
+                {p === 'year' && 'Год'}
+                {p === 'custom' && 'Период'}
+              </button>
+            ))}
+          </div>
+
           {period === 'custom' && (
-            <div className="flex items-center gap-2 text-xs text-zinc-400">
-              <span className="text-zinc-500 font-mono text-[11px]">с</span>
+            <div className="flex items-center gap-2 text-xs text-[#A1A1AA] font-sans">
+              <span>с</span>
               <input
                 type="date"
                 value={start}
                 onChange={(e) => handleCustomDateChange('start', e.target.value)}
-                className="bg-zinc-900 border border-zinc-800 rounded-lg px-2 py-1 text-zinc-200 focus:outline-none focus:ring-1 focus:ring-red-600 font-mono text-[11px] cursor-pointer"
+                className="bg-black/60 border border-white/10 rounded-lg px-2.5 py-1 text-white focus:outline-none focus:ring-1 focus:ring-[#7C5CFF] font-mono text-[11px] cursor-pointer"
               />
-              <span className="text-zinc-500 font-mono text-[11px]">по</span>
+              <span>по</span>
               <input
                 type="date"
                 value={end}
                 onChange={(e) => handleCustomDateChange('end', e.target.value)}
-                className="bg-zinc-900 border border-zinc-800 rounded-lg px-2 py-1 text-zinc-200 focus:outline-none focus:ring-1 focus:ring-red-600 font-mono text-[11px] cursor-pointer"
+                className="bg-black/60 border border-white/10 rounded-lg px-2.5 py-1 text-white focus:outline-none focus:ring-1 focus:ring-[#7C5CFF] font-mono text-[11px] cursor-pointer"
               />
             </div>
           )}
 
           {loading && (
-            <span className="animate-spin rounded-full h-3.5 w-3.5 border-2 border-t-red-600 border-zinc-800 shrink-0" />
+            <span className="animate-spin rounded-full h-3.5 w-3.5 border-2 border-t-[#7C5CFF] border-white/20" />
           )}
         </div>
       </div>
-      
-      {/* 1. HERO MAIN METRIC FOR TODAY / CHOSEN DAY */}
-      {overall && (
-        <div className="relative overflow-hidden rounded-2xl border border-zinc-800 bg-gradient-to-r from-zinc-950 to-zinc-900 p-6 sm:p-8 shadow-xl">
-          <div className="absolute top-0 right-0 h-40 w-40 bg-rose-500/5 rounded-full blur-3xl pointer-events-none"></div>
-          <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-6">
-            <div>
-              <div className="flex items-center gap-2 text-rose-400 mb-1.5">
-                <AlertCircle className="h-4 w-4" />
-                <span className="text-xs sm:text-sm font-medium uppercase tracking-wider">Основной индикатор потерь</span>
-              </div>
-              <h2 className="text-2xl sm:text-3xl font-bold text-white tracking-tight">
-                Упущено
-              </h2>
-              <div className="mt-3 flex items-baseline gap-2">
-                <span className="text-4xl sm:text-6xl font-extrabold tracking-tight text-rose-500 font-mono">
-                  {formatCurrency(overall.lost)}
-                </span>
-                <span className="text-xs sm:text-sm text-zinc-500 font-mono ml-2">
-                  {period === 'day' && `за день ${start.split('-').reverse().join('.')}`}
-                  {period === 'week' && `за неделю c ${start.split('-').reverse().join('.')} по ${end.split('-').reverse().join('.')}`}
-                  {period === 'month' && `за месяц c ${start.split('-').reverse().join('.')} по ${end.split('-').reverse().join('.')}`}
-                  {period === 'year' && `за год c ${start.split('-').reverse().join('.')} по ${end.split('-').reverse().join('.')}`}
-                  {period === 'custom' && `за период c ${start.split('-').reverse().join('.')} по ${end.split('-').reverse().join('.')}`}
-                </span>
-              </div>
-              <p className="text-zinc-400 text-xs sm:text-sm mt-3 max-w-xl">
-                Упущенная выручка — это недозаработанные средства из-за пустующих объектов. Рассчитано строго по тарифу дня.
-              </p>
-            </div>
 
-            {/* Quick Today's occupancy meter */}
-            <div className="flex flex-col sm:flex-row items-center gap-4 sm:gap-6 rounded-xl border border-zinc-800 bg-zinc-900/55 p-4 sm:p-5 md:w-80">
-              <div className="flex-1 w-full space-y-3">
-                <div className="flex justify-between text-xs">
-                  <span className="text-zinc-400">
-                    {period === 'day' ? 'Загрузка сегодня:' : 'Средняя загрузка:'}
-                  </span>
-                  <span className="text-emerald-400 font-semibold">{Math.round(overall.occupancy)}%</span>
-                </div>
-                <div className="h-2 w-full rounded-full bg-zinc-800 overflow-hidden">
-                  <div 
-                    className="h-full bg-emerald-500 rounded-full" 
-                    style={{ width: `${overall.occupancy}%` }}
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-2 text-center pt-2 border-t border-zinc-800">
-                  <div>
-                    <div className="text-[10px] text-zinc-500 uppercase tracking-widest font-mono">
-                      {period === 'day' ? 'Занято' : 'Средняя занятость'}
-                    </div>
-                    <div className="text-sm font-semibold text-zinc-300 font-mono">
-                      {period === 'day' && today
-                        ? `${today.occupiedUnits} / ${today.activeUnits}`
-                        : `${Math.round(overall.totalOccupiedUnits / (overall.totalDays || 1))} / ${Math.round(overall.totalActiveUnits / (overall.totalDays || 1))}`}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-[10px] text-zinc-500 uppercase tracking-widest font-mono">
-                      {period === 'day' ? 'Свободно' : 'Средний простой'}
-                    </div>
-                    <div className="text-sm font-semibold text-zinc-300 font-mono">
-                      {period === 'day' && today
-                        ? today.freeUnits
-                        : Math.round((overall.totalActiveUnits - overall.totalOccupiedUnits) / (overall.totalDays || 1))}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 2. CORE PERIOD METRIC CARDS */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* COCKPIT CENTER: COMBINED PRIMARY & COMPACT SECONDARY KPI BLOCK */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         
-        {/* Potential Revenue Card */}
-        <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/40 p-5 shadow-sm">
-          <div className="flex justify-between items-center text-zinc-500 mb-2">
-            <span className="text-xs font-medium uppercase tracking-wider">Ресурс (Потенциал)</span>
-            <ArrowUpRight className="h-4 w-4 text-zinc-400/50" />
+        {/* HERO KPI DISPLAY: LOST REVENUE (LEFT 2/3) */}
+        <div className="lg:col-span-2 glass-panel rounded-2xl p-6 sm:p-8 flex flex-col justify-between relative overflow-hidden">
+          {/* Corner graphic reflection */}
+          <div className="absolute -top-10 -right-10 h-32 w-32 bg-[#FF2D63]/5 rounded-full blur-3xl pointer-events-none" />
+          
+          <div>
+            <div className="flex items-center gap-2 text-[#FF2D63] mb-3 font-sans">
+              <span className="h-1.5 w-1.5 rounded-full bg-[#FF2D63] shadow-[0_0_8px_#FF2D63]" />
+              <span className="text-xs font-bold uppercase tracking-widest font-mono">Главный показатель эффективности</span>
+            </div>
+            
+            <h2 className="text-sm font-semibold text-[#A1A1AA] uppercase tracking-wider font-sans">
+              Упущенная выручка за период
+            </h2>
+            
+            <div className="mt-4">
+              <span className="text-5xl sm:text-7xl font-sans font-black text-[#FF2D63] font-mono tracking-tight num-text-shadow leading-none block select-all">
+                {formatCurrency(overall.lost)}
+              </span>
+            </div>
           </div>
-          <div className="text-lg sm:text-2xl font-bold tracking-tight text-white font-mono break-all">
-            {formatCurrency(overall.potential)}
+
+          <div className="mt-8 pt-4 border-t border-white/5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 font-sans font-normal">
+            <p className="text-[#A1A1AA] text-xs max-w-lg leading-relaxed">
+              Потери из-за пустого номерного фонда, вычисленные посуточно на базе сезонного тарифа. Каждая пропущенная бронь снижает маржинальность курорта.
+            </p>
+            <span className="text-[11px] font-mono text-[#71717A] shrink-0 bg-white/5 py-1 px-2.5 rounded border border-white/5 self-start">
+              Ставка: 100% от ценности упущенного тарифа
+            </span>
           </div>
-          <p className="text-[11px] text-zinc-500 mt-1 max-w-full truncate">Максимально доступный доход за период</p>
         </div>
 
-        {/* Actual Revenue Card */}
-        <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/40 p-5 shadow-sm">
-          <div className="flex justify-between items-center text-zinc-500 mb-2">
-            <span className="text-xs font-medium uppercase tracking-wider">Фактически</span>
-            <TrendingUp className="h-4 w-4 text-emerald-500" />
+        {/* COMPACT HOVER STATS PANEL (RIGHT 1/3) */}
+        <div className="grid grid-cols-1 gap-4 font-sans font-medium">
+          
+          {/* POTENTIAL */}
+          <div className="glass-panel rounded-2xl p-5 flex flex-col justify-between hover:border-white/20 transition-all duration-300">
+            <div className="flex items-center justify-between text-[#A1A1AA]">
+              <span className="text-xs uppercase tracking-wider font-semibold">Потенциал (Ресурс)</span>
+              <span className="text-[10px] bg-white/5 px-2 py-0.5 rounded font-mono text-[#F8FAFC]">100%</span>
+            </div>
+            <div className="mt-2 text-2xl font-black text-[#F8FAFC] font-mono tracking-tight">
+              {formatCurrency(overall.potential)}
+            </div>
+            <div className="text-[10px] text-[#A1A1AA] mt-1 font-normal">
+              Максимально достижимый доход при 100% загрузке
+            </div>
           </div>
-          <div className="text-lg sm:text-2xl font-bold tracking-tight text-emerald-400 font-mono break-all">
-            {formatCurrency(overall.actual)}
-          </div>
-          <p className="text-[11px] text-zinc-500 mt-1 max-w-full truncate">Реально зафиксированные продажи</p>
-        </div>
 
-        {/* Lost Revenue Card */}
-        <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/40 p-5 shadow-sm">
-          <div className="flex justify-between items-center text-zinc-500 mb-2">
-            <span className="text-xs font-medium uppercase tracking-wider">Кумулятивно упущено</span>
-            <AlertTriangle className="h-4 w-4 text-rose-500" />
+          {/* ACTUAL */}
+          <div className="glass-panel rounded-2xl p-5 flex flex-col justify-between hover:border-white/20 transition-all duration-300">
+            <div className="flex items-center justify-between text-[#A1A1AA]">
+              <span className="text-xs uppercase tracking-wider font-semibold font-sans">Фактически (Заработано)</span>
+              <span className="text-[10px] bg-[#00E09D]/10 text-[#00E09D] px-2 py-0.5 rounded font-mono font-bold">
+                {overall.potential > 0 ? Math.round((overall.actual / overall.potential) * 100) : 0}% ресурса
+              </span>
+            </div>
+            <div className="mt-2 text-2xl font-black text-[#00E09D] font-mono tracking-tight">
+              {formatCurrency(overall.actual)}
+            </div>
+            <div className="text-[10px] text-[#A1A1AA] mt-1 font-normal">
+              Зафиксированные реальные продажи
+            </div>
           </div>
-          <div className="text-lg sm:text-2xl font-bold tracking-tight text-rose-500 font-mono break-all">
-            {formatCurrency(overall.lost)}
-          </div>
-          <p className="text-[11px] text-zinc-500 mt-1 max-w-full truncate">Разница между эталонной ценой и продажами</p>
-        </div>
 
-        {/* Global Occupancy Card */}
-        <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/40 p-5 shadow-sm">
-          <div className="flex justify-between items-center text-zinc-500 mb-2">
-            <span className="text-xs font-medium uppercase tracking-wider">Средняя загрузка</span>
-            <Percent className="h-4 w-4 text-amber-500" />
+          {/* OCCUPANCY & VACANCY SPLIT */}
+          <div className="glass-panel rounded-2xl p-5 flex flex-col justify-between hover:border-white/20 transition-all duration-300">
+            <div className="flex items-center justify-between text-[#A1A1AA] mb-1">
+              <span className="text-xs uppercase tracking-wider font-semibold font-sans">Загрузка и Остаток</span>
+              <span className="text-xs text-[#00E09D] font-bold font-mono">{Math.round(overall.occupancy)}% занято</span>
+            </div>
+            
+            <div className="h-2 w-full bg-white/5 rounded-full overflow-hidden mt-1.5 mb-2.5">
+              <div 
+                className="h-full bg-gradient-to-r from-[#00E09D] to-[#7C5CFF]" 
+                style={{ width: `${overall.occupancy}%` }}
+              />
+            </div>
+
+            <div className="flex justify-between items-center text-[11px] font-mono pt-1 text-[#A1A1AA]">
+              <div className="flex flex-col">
+                <span className="text-[#71717A] text-[9px] uppercase font-bold">Занято номеро-дней</span>
+                <span className="font-bold text-white">
+                  {period === 'day' && today
+                    ? `${today.occupiedUnits} / ${today.activeUnits}`
+                    : `${Math.round(overall.totalOccupiedUnits / (overall.totalDays || 1))} / ${Math.round(overall.totalActiveUnits / (overall.totalDays || 1))} в ср.`}
+                </span>
+              </div>
+              <div className="flex flex-col text-right">
+                <span className="text-[#71717A] text-[9px] uppercase font-bold">Свободно</span>
+                <span className="font-bold text-[#FFB020]">
+                  {period === 'day' && today
+                    ? `${today.freeUnits} объектов`
+                    : `${Math.round((overall.totalActiveUnits - overall.totalOccupiedUnits) / (overall.totalDays || 1))} в ср.`}
+                </span>
+              </div>
+            </div>
           </div>
-          <div className="text-lg sm:text-2xl font-bold tracking-tight text-zinc-100 font-mono">
-            {Math.round(overall.occupancy)}%
-          </div>
-          <p className="text-[11px] text-zinc-500 mt-1 max-w-full truncate">По физическим номерам проживания</p>
+
         </div>
 
       </div>
 
-      {/* 3. BENTO GRID DETAIL BLOCKS */}
+      {/* LOWER BENTO GRID: VACANT INVENTORIES, TOP LOSSES AND ACTIONABLE INTELLIGENCE */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         
-        {/* Column A: Top Losses & Vacant Inventory */}
-        <div className="lg:col-span-2 space-y-6">
-          
-          {/* Top Losses Ranking */}
-          <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-5">
-            <div className="flex items-center justify-between border-b border-zinc-800 pb-3 mb-4">
-              <div>
-                <h3 className="text-sm font-semibold text-white">Топ Потерь по категориям</h3>
-                <p className="text-xs text-zinc-500">Ранжирование потерь дохода по группам размещения</p>
+        {/* BENTO BLOCK 1: СТОИМОСТЬ ПУСТУЮЩИХ ОБЪЕКТОВ */}
+        {overall && (
+          <div className="glass-panel rounded-2xl p-6 flex flex-col justify-between hover:border-white/15 transition-all duration-300">
+            <div>
+              <div className="flex justify-between items-center mb-3">
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider font-sans">
+                  Стоимость пустующих объектов
+                </h3>
+                <span className="text-[11px] bg-[#FFB020]/10 text-[#FFB020] px-2.5 py-0.5 rounded-full font-mono font-medium">
+                  {period === 'day' && today ? `${today.freeUnits} свободны` : 'За период'}
+                </span>
               </div>
-              <span className="rounded-lg bg-zinc-900 border border-zinc-800 px-2 py-0.5 text-[10px] font-mono text-zinc-400">Глобально</span>
+              
+              <div className="mt-2">
+                <span className="text-2xl sm:text-3xl font-black text-white font-mono block">
+                  {formatCurrency(period === 'day' && today ? today.vacantValue : overall.vacantValue)}
+                </span>
+                <span className="text-[10px] text-[#A1A1AA] font-normal leading-normal mt-1 block font-sans">
+                  потеря в ценности из-за нулевой занятости
+                </span>
+              </div>
+            </div>
+
+            <div className="mt-6 pt-4 border-t border-white/5 font-sans font-normal">
+              <p className="text-xs text-[#A1A1AA] leading-relaxed">
+                {period === 'day' 
+                  ? 'Суммарный потенциал недополученных денег, если данные свободные номера останутся незаселенными до конца дня. Рассчитано перемножением свободных юнитов на тариф.'
+                  : 'Сотни тысяч рублей, потерянные кумулятивно за выбранный период из-за простоя номеров без активных заездов. Рассчитано строго по тарифам пустующих дней.'}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* BENTO BLOCK 2: ТОП ПОТЕРЬ ПО КАТЕГОРИЯМ */}
+        <div className="glass-panel rounded-2xl p-6 flex flex-col justify-between hover:border-white/15 transition-all duration-300">
+          <div>
+            <div className="flex items-center justify-between mb-4 border-b border-white/5 pb-2">
+              <div>
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider font-sans">Топ Потерь по категориям</h3>
+                <p className="text-[10px] text-[#71717A] font-normal mt-0.5 font-sans">Ранжирование потерь дохода по группам размещения</p>
+              </div>
+              <span className="rounded bg-white/5 border border-white/10 px-2 py-0.5 text-[9px] font-mono text-[#A1A1AA]">
+                Глобально
+              </span>
             </div>
 
             {localData?.topLosses && localData.topLosses.length > 0 ? (
-              <div className="space-y-4">
-                {localData.topLosses.slice(0, 5).map((tl, idx) => (
-                  <div key={idx} className="space-y-1.5">
-                    <div className="flex justify-between text-xs sm:text-sm">
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono text-xs text-zinc-600">0{idx + 1}</span>
-                        <span className="font-semibold text-zinc-200">{tl.category}</span>
+              <div className="space-y-3.5">
+                {localData.topLosses.slice(0, 3).map((tl, idx) => (
+                  <div key={idx} className="space-y-1">
+                    <div className="flex justify-between text-xs sm:text-sm font-sans font-medium">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-mono text-[10px] text-[#71717A] font-bold">0{idx + 1}</span>
+                        <span className="font-semibold text-white truncate max-w-[130px]" title={tl.category}>
+                          {tl.category}
+                        </span>
                       </div>
-                      <div className="flex items-center gap-3 font-mono">
-                        <span className="text-zinc-500 text-xs">Упущено:</span>
-                        <span className="font-bold text-rose-500">{formatCurrency(tl.lost)}</span>
+                      <div className="flex items-center gap-2 font-mono text-[11px]">
+                        <span className="text-[#71717A]">Упущено:</span>
+                        <span className="font-bold text-[#FF2D63]">{formatCurrency(tl.lost)}</span>
                       </div>
                     </div>
-                    {/* Progress Bar indicating loss portion of potential */}
-                    <div className="h-1.5 w-full bg-zinc-900 rounded-full overflow-hidden flex">
+
+                    <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden flex">
                       <div 
-                        className="bg-emerald-500" 
+                        className="bg-[#00E09D]" 
                         style={{ width: `${tl.potential > 0 ? (tl.actual / tl.potential) * 100 : 0}%` }}
                         title={`Заработано: ${formatCurrency(tl.actual)}`}
                       />
                       <div 
-                        className="bg-rose-500/85" 
+                        className="bg-[#FF2D63]" 
                         style={{ width: `${tl.potential > 0 ? (tl.lost / tl.potential) * 100 : 0}%` }}
                         title={`Упущено: ${formatCurrency(tl.lost)}`}
                       />
                     </div>
-                    <div className="flex justify-between text-[10px] text-zinc-500 font-mono">
+                    <div className="flex justify-between text-[9px] text-[#71717A] font-mono leading-none pt-0.5">
                       <span>Фактическая выручка: {formatCurrency(tl.actual)}</span>
                       <span>Доля потерь: {tl.potential > 0 ? Math.round((tl.lost / tl.potential) * 100) : 0}%</span>
                     </div>
@@ -525,109 +559,56 @@ export default function DashboardScreen({
                 ))}
               </div>
             ) : (
-              <div className="text-center py-6 text-zinc-500 text-xs text-zinc-500">Нет данных для составления рейтинга.</div>
+              <p className="text-center py-6 text-[#71717A] text-xs">Нет записей для формирования рейтинга</p>
             )}
           </div>
 
-          {/* Today vacant inventories cost */}
-          {overall && (
-            <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-5">
-              <div className="flex justify-between items-center mb-3">
-                <h3 className="text-sm font-semibold text-white">
-                  {period === 'day' ? 'Стоимость пустующих объектов сегодня' : 'Кумулятивная стоимость простоя за период'}
-                </h3>
-                <span className="text-xs text-amber-500 font-mono">
-                  {period === 'day' && today ? `${today.freeUnits} свободных объектов` : 'По всему фонду'}
-                </span>
-              </div>
-              <div className="flex items-baseline gap-2 mb-3">
-                <span className="text-2xl font-bold text-zinc-200 font-mono">
-                  {formatCurrency(period === 'day' && today ? today.vacantValue : overall.vacantValue)}
-                </span>
-                <span className="text-xs text-zinc-500">потеря в ценности из-за нулевой занятости</span>
-              </div>
-              <p className="text-xs text-zinc-500">
-                {period === 'day' 
-                  ? 'Сумма потенциально неполученных денег, если данные свободные номера останутся незаселенными до конца дня. Рассчитано перемножением свободных юнитов на тариф.'
-                  : 'Сотни тысяч рублей, потерянные кумулятивно за выбранный период из-за простоя номеров без заселения. Рассчитано строго по тарифам пустующих дней.'}
-              </p>
-            </div>
-          )}
-
+          <div className="mt-4 pt-4 border-t border-white/5 text-[10px] text-[#71717A] flex justify-between items-center font-sans font-normal">
+            <span>Цветом помечен Факт и Потеря</span>
+            <button 
+              onClick={() => onNavigateToTab('mappings')}
+              className="text-[#7C5CFF] hover:text-[#FFFFFF] cursor-pointer"
+            >
+              Связи категорий →
+            </button>
+          </div>
         </div>
 
-        {/* Column B: System logs/reports & Attention lists */}
-        <div className="space-y-6">
-          
-          {/* Action and Attention alert list */}
-          <div className="rounded-xl border border-rose-950/45 bg-zinc-950 p-5">
-            <h3 className="text-xs font-mono font-bold uppercase tracking-widest text-zinc-400 mb-3 flex items-center gap-1.5">
-              <AlertTriangle className="h-3.5 w-3.5 text-amber-500 animate-pulse" />
-              <span>Что требует внимания</span>
-            </h3>
+        {/* BENTO BLOCK 3: ЧТО СДЕЛАТЬ СЕЙЧАС */}
+        <div className="glass-panel rounded-2xl p-6 flex flex-col justify-between hover:border-white/15 transition-all duration-300">
+          <div>
+            <div className="flex items-center gap-2 mb-4">
+              <AlertCircle className="h-4 w-4 text-[#FFB020] shrink-0" />
+              <h3 className="text-sm font-bold text-white uppercase tracking-wider font-sans">
+                Что сделать сейчас
+              </h3>
+            </div>
 
             {attentionItems.length > 0 ? (
-              <div className="space-y-3">
-                {attentionItems.map((item, idx) => (
-                  <div key={idx} className="flex gap-2 p-2.5 rounded-lg bg-zinc-900/65 border border-zinc-800 text-xs text-zinc-300">
-                    <span className="font-bold text-amber-500">•</span>
+              <div className="space-y-2.5 max-h-[170px] overflow-y-auto pr-1">
+                {attentionItems.slice(0, 3).map((item, idx) => (
+                  <div key={idx} className="p-2.5 rounded-lg bg-black/40 border border-[#FFB020]/20 flex gap-2 text-[11px] text-[#A1A1AA] leading-relaxed font-sans font-normal">
+                    <span className="text-[#FFB020] font-bold shrink-0">•</span>
                     <span>{item}</span>
                   </div>
                 ))}
               </div>
             ) : (
-              <div className="text-center py-8">
-                <p className="text-xs text-emerald-500 font-medium">✨ Все синхронизировано и скоординировано отлично!</p>
-                <p className="text-[10px] text-zinc-500 mt-1">Ошибки согласования отсутствуют.</p>
+              <div className="py-6 text-center text-[#00E09D] font-sans">
+                <p className="text-xs font-semibold">✨ Противоречий и пропусков не найдено!</p>
+                <p className="text-[10px] text-[#71717A] mt-1 font-normal">Отель функционирует по плану без конфликтов цен.</p>
               </div>
             )}
           </div>
 
-          {/* Last import info */}
-          <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-5 space-y-3">
-            <h3 className="text-sm font-semibold text-white flex items-center gap-1.5 border-b border-zinc-800 pb-2">
-              <FileSpreadsheet className="h-4 w-4 text-zinc-400" />
-              <span>Последний импорт</span>
-            </h3>
-
-            {data.lastImport ? (
-              <div className="space-y-2 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-zinc-500">Файл:</span>
-                  <span className="text-zinc-300 font-medium truncate max-w-[150px]" title={data.lastImport.fileName}>
-                    {data.lastImport.fileName}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-zinc-500">Тип:</span>
-                  <span className="text-zinc-300 font-medium">
-                    {data.lastImport.fileType === 'yearly_revenue_report' ? 'Отчет Bnovo' : 'Прайс-лист'}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-zinc-500">Загружен:</span>
-                  <span className="text-zinc-300">
-                    {new Date(data.lastImport.uploadedAt).toLocaleDateString('ru-RU')}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-zinc-500">Предупреждения:</span>
-                  <span className={data.lastImport.warnings.length > 0 ? 'text-amber-500' : 'text-emerald-500'}>
-                    {data.lastImport.warnings.length}
-                  </span>
-                </div>
-                <button
-                  onClick={() => onNavigateToTab('import')}
-                  className="w-full mt-2 text-center py-1.5 rounded bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-[11px] text-zinc-300 transition-all font-mono"
-                >
-                  Все импорты →
-                </button>
-              </div>
-            ) : (
-              <p className="text-xs text-zinc-500 text-center py-4">Импортированные файлы запуска отсутствуют.</p>
-            )}
+          <div className="mt-4 pt-4 border-t border-white/5 font-sans">
+            <button 
+              onClick={() => onNavigateToTab('calendar')}
+              className="w-full text-center py-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-semibold text-[#FFFFFF] transition-all"
+            >
+              Проинспектировать календарь потерь →
+            </button>
           </div>
-
         </div>
 
       </div>

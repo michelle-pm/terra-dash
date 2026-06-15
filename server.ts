@@ -128,7 +128,13 @@ let bypassRole = 'Admin';
 
 // Token Verification Middleware
 const authMiddleware = async (req: any, res: any, next: any) => {
-  if (req.path === '/api/health' || req.path === '/api/db/restore-backup') {
+  if (
+    req.path === '/api/health' ||
+    req.path === '/health' ||
+    req.originalUrl === '/api/health' ||
+    req.path === '/api/db/restore-backup' ||
+    req.path === '/db/restore-backup'
+  ) {
     return next();
   }
 
@@ -232,6 +238,25 @@ function getDbDateRange(db: any): string[] {
   db.revenueData.forEach((r: any) => dates.add(r.date));
   return Array.from(dates).sort();
 }
+
+// Health endpoints
+app.get('/api/health', (req, res) => {
+  res.json({
+    ok: true,
+    api: "online",
+    mode: process.env.NODE_ENV || "development",
+    uploadUrl: "/api/upload"
+  });
+});
+
+app.get('/health', (req, res) => {
+  res.json({
+    ok: true,
+    api: "online",
+    mode: process.env.NODE_ENV || "development",
+    uploadUrl: "/api/upload"
+  });
+});
 
 // API Routes
 app.get('/api/db', (req: any, res) => {

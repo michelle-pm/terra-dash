@@ -248,7 +248,7 @@ export default function App() {
   ];
 
   return (
-    <div className="min-h-screen bg-[#050505] text-[#EDEDED] selection:bg-red-600 selection:text-white font-sans">
+    <div className="min-h-screen bg-transparent text-[#EDEDED] selection:bg-red-600 selection:text-white font-sans">
       
       {/* Central Notification Success Toast */}
       {toastMessage && (
@@ -278,7 +278,7 @@ export default function App() {
           {/* SIDEBAR FOR DESKTOP */}
           <aside className={`shrink-0 transition-all duration-300 ${
             isSidebarCollapsed ? 'w-16' : 'w-64'
-          } hidden md:block bg-[#0A0A0A] border border-[#1F1F1F] rounded-xl p-3 h-auto sticky top-20`}>
+          } hidden md:block glass-panel rounded-xl p-3 h-auto sticky top-20`}>
             
             <div className={`flex items-center ${isSidebarCollapsed ? 'justify-center mb-4' : 'justify-between mb-4 pb-2 border-b border-[#1F1F1F]'}`}>
               {!isSidebarCollapsed && (
@@ -348,7 +348,7 @@ export default function App() {
           </aside>
 
           {/* MOBILE TOGGLER & DROP DOWN */}
-          <div className="md:hidden w-full bg-[#0A0A0A] border border-[#1F1F1F] rounded-xl p-2.5 mb-2">
+          <div className="md:hidden w-full glass-panel rounded-xl p-2.5 mb-2">
             <div className="flex items-center justify-between">
               <button 
                 onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
