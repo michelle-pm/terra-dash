@@ -39,6 +39,7 @@ export interface RevenueData {
 
 export interface PriceData {
   category: string; // Price list category name, e.g. "Полусфера Neodome"
+  originalCategory?: string; // Original spreadsheet category name, e.g. "Полусфера Neodome (без завтрака)"
   date: string; // YYYY-MM-DD
   price: number;
   importId: string;

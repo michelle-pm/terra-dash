@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Sparkles, Calendar, AlertOctagon, TrendingDown, RefreshCw, BarChart2, ShieldAlert } from 'lucide-react';
+import { apiFetch } from '../lib/api';
 
 interface RiskCategory {
   category: string;
@@ -25,7 +26,7 @@ export default function ForecastScreen() {
   // Load forecast metrics on change
   useEffect(() => {
     setIsLoading(true);
-    fetch(`/api/forecast?periodDays=${daysPeriod}`)
+    apiFetch(`/api/forecast?periodDays=${daysPeriod}`)
       .then(res => res.json())
       .then(data => {
         setForecast(data);

@@ -10,15 +10,33 @@ const xlsxInstance: any = typeof XLSX.readFile === 'function' ? XLSX : ((XLSX as
 
 const DB_PATH = path.join(process.cwd(), 'db.json');
 
-// Background sync initialization
-get(ref(serverRtdb, 'global_database')).then(snap => {
-  if (snap.exists()) {
-    const data = snap.val();
-    if (!data.tariffs) data.tariffs = {};
-    fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2));
-    console.log("Synchronized database from Firebase Realtime Database at boot.");
+export async function syncDatabaseAtBoot(): Promise<void> {
+  const propertyId = 'terra_altaya';
+  try {
+    const snap = await get(ref(serverRtdb, `properties/${propertyId}`));
+    if (snap.exists()) {
+      const data = snap.val();
+      if (!data.tariffs) data.tariffs = {};
+      if (!data.correctionLog) data.correctionLog = [];
+      if (!data.imports) data.imports = [];
+      if (!data.revenueData) data.revenueData = [];
+      if (!data.priceData) data.priceData = [];
+      if (!data.mappings) data.mappings = [];
+      
+      fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2), 'utf-8');
+      console.log(`Successfully synchronized database for ${propertyId} from cloud storage.`);
+    } else {
+      console.log(`No cloud database found for ${propertyId}, constructing fresh defaults.`);
+      const initial = getInitialDatabase();
+      fs.writeFileSync(DB_PATH, JSON.stringify(initial, null, 2), 'utf-8');
+    }
+  } catch (err) {
+    console.error("Critical Cloud Database synchronization failed at boot:", err);
+    if (!fs.existsSync(DB_PATH)) {
+      fs.writeFileSync(DB_PATH, JSON.stringify(getInitialDatabase(), null, 2), 'utf-8');
+    }
   }
-}).catch(e => console.error("Firebase sync error at boot:", e));
+}
 
 // Interface of database on disk
 export interface LocalDatabase {
@@ -27,31 +45,39 @@ export interface LocalDatabase {
   priceData: PriceData[];
   mappings: CategoryMapping[];
   correctionLog: CorrectionLog[];
-  role: 'Admin' | 'Viewer';
   // Manual tariff overrides for calendar/tariffs screen
   tariffs: { [category: string]: { [date: string]: number } };
 }
 
 export function normalizeText(str: string): string {
   if (!str) return '';
-  return str
-    .replace(/C/g, 'С').replace(/c/g, 'с') // Latin C to Cyrillic С
-    .replace(/T/g, 'Т').replace(/t/g, 'т') // Latin T to Cyrillic Т
-    .replace(/M/g, 'М').replace(/m/g, 'м') // Latin M to Cyrillic М
-    .replace(/A/g, 'А').replace(/a/g, 'а') // Latin A to Cyrillic А
-    .replace(/K/g, 'К').replace(/k/g, 'к') // Latin K to Cyrillic К
-    .replace(/P/g, 'П').replace(/p/g, 'п') // Latin P to Cyrillic П
-    .replace(/E/g, 'Е').replace(/e/g, 'е') // Latin E to Cyrillic Е
-    .replace(/O/g, 'О').replace(/o/g, 'о') // Latin O to Cyrillic О
-    .replace(/B/g, 'В').replace(/b/g, 'в') // Latin B to Cyrillic В
-    .replace(/X/g, 'Х').replace(/x/g, 'х') // Latin X to Cyrillic Х
-    .replace(/\s+/g, ' ')
-    .trim();
+  return str.replace(/\s+/g, ' ').trim();
+}
+
+export function normalizeUnitName(str: string): string {
+  if (!str) return '';
+  let cleaned = str.replace(/\s+/g, '').trim();
+  const firstChar = cleaned.charAt(0);
+  const remaining = cleaned.slice(1);
+  
+  if (/^[A-Za-zА-Яа-я]\d+$/.test(cleaned)) {
+    let canonicalFirst = firstChar;
+    const lower = firstChar.toLowerCase();
+    if (lower === 'c' || lower === 'с') canonicalFirst = 'С';
+    else if (lower === 'f' || lower === 'ф') canonicalFirst = 'F';
+    else if (lower === 't' || lower === 'т') canonicalFirst = 'Т';
+    else if (lower === 'm' || lower === 'м') canonicalFirst = 'М';
+    else if (lower === 'a' || lower === 'а') canonicalFirst = 'А';
+    else if (lower === 'k' || lower === 'к') canonicalFirst = 'К';
+    else if (lower === 'p' || lower === 'п') canonicalFirst = 'П';
+    
+    return canonicalFirst + remaining;
+  }
+  return cleaned;
 }
 
 export function getAltaiTodayStr(): string {
   const now = new Date();
-  // Altai is UTC+7
   const utcOffset = now.getTimezoneOffset() * 60000;
   const utcTime = now.getTime() + utcOffset;
   const altaiDate = new Date(utcTime + (7 * 3600000));
@@ -80,7 +106,6 @@ export function getInitialDatabase(): LocalDatabase {
     priceData: [],
     mappings: [...DEFAULT_MAPPINGS],
     correctionLog: [],
-    role: 'Admin',
     tariffs: {}
   };
 }
@@ -196,7 +221,7 @@ export function writeDatabase(db: LocalDatabase) {
   try {
     fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2), 'utf-8');
     // Asynchronous background sync to Firebase
-    set(ref(serverRtdb, 'global_database'), db).catch(e => console.error("Firebase write error:", e));
+    set(ref(serverRtdb, 'properties/terra_altaya'), db).catch(e => console.error("Firebase write error:", e));
   } catch (err) {
     console.error('Error writing DB:', err);
   }
@@ -261,8 +286,16 @@ export function parsePeriodHeader(header: string, defaultYear = 2026): DatePerio
 
   let startDay = parseInt(startMatch[1], 10);
   let startMonth = parseInt(startMatch[2], 10);
-  let startYear = startMatch[3] ? parseInt(startMatch[3], 10) : endYear;
-  if (startYear < 100) startYear += 2000;
+  let startYear = endYear;
+  if (startMatch[3]) {
+    startYear = parseInt(startMatch[3], 10);
+    if (startYear < 100) startYear += 2000;
+  } else {
+    // If startMonth exceeds endMonth, it belongs to the previous year of endYear
+    if (startMonth > endMonth) {
+      startYear = endYear - 1;
+    }
+  }
 
   const pad = (n: number) => n.toString().padStart(2, '0');
   return {
@@ -396,11 +429,13 @@ export function parseBnovoReport(filePath: string, fileName: string, uploadedBy:
       valLower.includes('сумма') ||
       valLower.includes('среднее') ||
       valLower.includes('разниц') ||
+      valLower.includes('всего за проживание') ||
+      valLower.includes('всего по категории') ||
       cleanVal === ''
     ) {
       continue;
     }
-    colUnitMap[c] = cleanVal;
+    colUnitMap[c] = normalizeUnitName(cleanVal);
   }
 
   const parsedRevenue: RevenueData[] = [];
@@ -549,35 +584,75 @@ export function parsePriceList(filePath: string, fileName: string, uploadedBy: s
 
   const importId = 'imp_' + Date.now();
 
+  interface CategoryRow {
+    rawRow: any[];
+    originalName: string;
+    canonicalName: string;
+  }
+  const groupedRows: { [canonicalName: string]: CategoryRow[] } = {};
+
   for (let r = 1; r < rawRows.length; r++) {
     const row = rawRows[r];
     if (!row || row.length === 0) continue;
 
-    const catName = row[0] ? normalizeText(row[0].toString().trim()) : '';
-    if (!catName || catName.toLowerCase().includes('наименование')) continue;
+    const originalName = row[0] ? row[0].toString().trim() : '';
+    if (!originalName || originalName.toLowerCase().includes('наименование')) continue;
 
-    categories.push(catName);
+    const canonicalName = normalizeText(originalName)
+      .replace(/\s*\(без завтрака\)\s*/gi, '')
+      .replace(/\s*\(с завтраком\)\s*/gi, '')
+      .trim();
+
+    if (!groupedRows[canonicalName]) {
+      groupedRows[canonicalName] = [];
+    }
+    groupedRows[canonicalName].push({
+      rawRow: row,
+      originalName,
+      canonicalName
+    });
+  }
+
+  for (const [canonicalName, rowList] of Object.entries(groupedRows)) {
+    let selected = rowList[0];
+    if (rowList.length > 1) {
+      const withoutBreakfast = rowList.find(row => row.originalName.toLowerCase().includes('без завтрака'));
+      if (withoutBreakfast) {
+        selected = withoutBreakfast;
+      }
+    }
+
+    categories.push(canonicalName);
+
+    const row = selected.rawRow;
 
     for (const { colIndex, period } of periods) {
       if (!periodStart || period.startDate < periodStart) periodStart = period.startDate;
       if (!periodEnd || period.endDate > periodEnd) periodEnd = period.endDate;
 
       const rawVal = row[colIndex];
+      
+      const isEmpty = rawVal === '' || rawVal === null || rawVal === undefined || 
+        (typeof rawVal === 'string' && (rawVal.trim() === '' || rawVal.trim() === '-' || rawVal.trim() === '–'));
+
+      if (isEmpty) {
+        continue;
+      }
+
       let amount = 0;
-      if (rawVal !== '' && rawVal !== null && rawVal !== undefined) {
-        if (typeof rawVal === 'number') {
-          amount = rawVal;
-        } else {
-          const cleanVal = rawVal.toString().replace(/[\s\xa0]/g, '').replace(',', '.');
-          const parsed = parseFloat(cleanVal);
-          amount = isNaN(parsed) ? 0 : parsed;
-        }
+      if (typeof rawVal === 'number') {
+        amount = rawVal;
+      } else {
+        const cleanVal = rawVal.toString().replace(/[\s\xa0]/g, '').replace(',', '.');
+        const parsed = parseFloat(cleanVal);
+        amount = isNaN(parsed) ? 0 : parsed;
       }
 
       const days = expandPeriodToDays(period.startDate, period.endDate);
       for (const day of days) {
         parsedPrices.push({
-          category: catName,
+          category: canonicalName,
+          originalCategory: selected.originalName,
           date: day,
           price: amount,
           importId
@@ -694,27 +769,13 @@ export function calculateMetricsForDay(
     }
 
     const activeUnits = unitsOfCat.length;
-    // Free units represent the number of empty/blank cells in the category
-    const freeUnits = unitsOfCat.filter(u => u.isEmpty ?? (u.actualRevenue === 0)).length;
-    const occupiedUnits = Math.max(activeUnits - freeUnits, 0);
+    // Occupied are those rooms with actualRevenue > 0 and which are not marked empty
+    const occupiedUnits = unitsOfCat.filter(u => u.actualRevenue > 0 && !(u.isEmpty ?? false)).length;
+    const freeUnits = Math.max(activeUnits - occupiedUnits, 0);
 
+    const potentialRev = activeUnits * dailyPrice;
     const actualRevSum = unitsOfCat.reduce((sum, u) => sum + u.actualRevenue, 0);
-    
-    // Calculate total loss (vacant room loss)
-    let lostRev = 0;
-    let potentialRev = 0;
-
-    unitsOfCat.forEach(u => {
-      const isVacant = u.isEmpty ?? (u.actualRevenue === 0);
-      
-      if (isVacant) {
-        lostRev += dailyPrice;
-        potentialRev += dailyPrice;
-      } else {
-        potentialRev += u.actualRevenue; // The room is paid
-      }
-    });
-
+    const lostRev = Math.max(potentialRev - actualRevSum, 0);
     const vacantValue = freeUnits * dailyPrice;
 
     metrics.categories.push({
@@ -952,27 +1013,19 @@ export function mergeRevenueData(
   let inserted = 0;
   let updated = 0;
 
-  // Let's normalize all incoming item fields to prevent any Cyrillic/Latin mismatches
-  newData.forEach(item => {
-    item.unitName = normalizeText(item.unitName);
-    item.sourceCategory = normalizeText(item.sourceCategory);
-  });
-
-  // Collect imported dates
-  const importedDates = new Set(newData.map(item => item.date));
-
-  // For the imported dates, cross-reference existing items to write correction logs if they changed,
-  // then delete them and insert the clean new items.
   newData.forEach(newItem => {
+    newItem.unitName = normalizeUnitName(newItem.unitName);
+    newItem.sourceCategory = normalizeText(newItem.sourceCategory);
+
     const existingIdx = db.revenueData.findIndex(
-      r => r.date === newItem.date && normalizeText(r.unitName) === newItem.unitName
+      r => r.date === newItem.date && r.unitName === newItem.unitName
     );
 
     if (existingIdx !== -1) {
       const existingItem = db.revenueData[existingIdx];
-      if (existingItem.actualRevenue !== newItem.actualRevenue) {
+      if (existingItem.actualRevenue !== newItem.actualRevenue || existingItem.isEmpty !== newItem.isEmpty) {
         db.correctionLog.push({
-          id: 'corr_' + Math.random().toString(36).substr(2, 9),
+          id: 'corr_' + Math.random().toString(36).substring(2, 11),
           date: newItem.date,
           entityType: 'revenue',
           entityId: newItem.unitName,
@@ -983,18 +1036,21 @@ export function mergeRevenueData(
           user,
           changedAt: new Date().toISOString()
         });
+        
+        db.revenueData[existingIdx] = {
+          ...existingItem,
+          actualRevenue: newItem.actualRevenue,
+          sourceCategory: newItem.sourceCategory,
+          isEmpty: newItem.isEmpty,
+          importId: newItem.importId
+        };
         updated++;
       }
     } else {
+      db.revenueData.push(newItem);
       inserted++;
     }
   });
-
-  // Clean wipe for the imported dates
-  db.revenueData = db.revenueData.filter(r => !importedDates.has(r.date));
-
-  // Add the new data
-  db.revenueData.push(...newData);
 
   return { inserted, updated };
 }
@@ -1008,23 +1064,18 @@ export function mergePriceData(
   let inserted = 0;
   let updated = 0;
 
-  // Normalize new items
-  newData.forEach(item => {
-    item.category = normalizeText(item.category);
-  });
-
-  const importedDates = new Set(newData.map(item => item.date));
-
   newData.forEach(newItem => {
+    newItem.category = normalizeText(newItem.category);
+
     const existingIdx = db.priceData.findIndex(
-      p => p.date === newItem.date && normalizeText(p.category) === newItem.category
+      p => p.date === newItem.date && p.category === newItem.category
     );
 
     if (existingIdx !== -1) {
       const existingItem = db.priceData[existingIdx];
       if (existingItem.price !== newItem.price) {
         db.correctionLog.push({
-          id: 'corr_' + Math.random().toString(36).substr(2, 9),
+          id: 'corr_' + Math.random().toString(36).substring(2, 11),
           date: newItem.date,
           entityType: 'price',
           entityId: newItem.category,
@@ -1035,18 +1086,20 @@ export function mergePriceData(
           user,
           changedAt: new Date().toISOString()
         });
+        
+        db.priceData[existingIdx] = {
+          ...existingItem,
+          price: newItem.price,
+          originalCategory: newItem.originalCategory || existingItem.originalCategory,
+          importId: newItem.importId
+        };
         updated++;
       }
     } else {
+      db.priceData.push(newItem);
       inserted++;
     }
   });
-
-  // Clean wipe for imported dates
-  db.priceData = db.priceData.filter(p => !importedDates.has(p.date));
-
-  // Add the new data
-  db.priceData.push(...newData);
 
   return { inserted, updated };
 }

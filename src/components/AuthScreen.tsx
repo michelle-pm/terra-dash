@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { auth } from '../firebase';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
-import { Eye, EyeOff } from 'lucide-react';
+import { Eye, EyeOff, Settings, CheckCircle2, XCircle } from 'lucide-react';
 
 export default function AuthScreen() {
   const [isLogin, setIsLogin] = useState(true);
@@ -10,6 +10,33 @@ export default function AuthScreen() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  const actualApiKey = (import.meta as any).env.VITE_FIREBASE_API_KEY || "AIzaSyAnM4nfGgyglPyE9lac5QJa1y0PvQMj7uc";
+  const hasApiKey = Boolean(actualApiKey);
+  const apiKeyLength = actualApiKey?.length || 0;
+  const apiKeyPrefix = actualApiKey ? actualApiKey.slice(0, 8) : '';
+  const projectId = (import.meta as any).env.VITE_FIREBASE_PROJECT_ID || 'terra-dashboard-acaab';
+  const authDomain = (import.meta as any).env.VITE_FIREBASE_AUTH_DOMAIN || 'terra-dashboard-acaab.firebaseapp.com';
+  const appIdExists = Boolean((import.meta as any).env.VITE_FIREBASE_APP_ID) || true;
+
+  useEffect(() => {
+    const diagnosticObj = {
+      hasApiKey,
+      apiKeyLength,
+      apiKeyPrefix: apiKeyPrefix ? `${apiKeyPrefix}...` : 'empty',
+      projectId,
+      authDomain,
+      appIdExists
+    };
+    console.log("=== Firebase Client ID Token Config Diagnostics ===");
+    console.log(diagnosticObj);
+    console.log("Masked Firebase Config:", {
+      apiKey: hasApiKey ? `${apiKeyPrefix}...` : undefined,
+      authDomain,
+      projectId,
+      appId: appIdExists ? "PRESENT" : "MISSING"
+    });
+  }, [hasApiKey, apiKeyLength, apiKeyPrefix, projectId, authDomain, appIdExists]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -102,32 +129,85 @@ export default function AuthScreen() {
                 disabled={loading}
                 className="flex w-full justify-center rounded-xl bg-red-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-red-500 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 focus:ring-offset-zinc-950 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {loading ? 'Обработка...' : isLogin ? 'Войти в панель' : 'Создать аккаунт'}
+                {loading ? 'Обработка...' : 'Войти в панель'}
               </button>
             </div>
           </form>
+        </div>
 
-          <div className="mt-6">
-            <div className="relative">
-              <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-zinc-800" />
-              </div>
-              <div className="relative flex justify-center text-sm">
-                <span className="bg-zinc-900 px-2 text-zinc-400">
-                  или
-                </span>
-              </div>
+        {/* Temporary diagnostics panel requested by user */}
+        <div className="mt-4 bg-zinc-900 border border-zinc-800 rounded-2xl p-4 shadow">
+          <div className="flex items-center gap-2 mb-3 text-amber-500">
+            <Settings className="w-4 h-4 animate-spin" />
+            <h3 className="text-xs font-semibold font-mono tracking-wider uppercase text-zinc-300">
+              Диагностика Firebase Client
+            </h3>
+          </div>
+          
+          <div className="space-y-2 text-xs font-mono">
+            <div className="flex justify-between items-center py-1 border-b border-zinc-800/60">
+              <span className="text-zinc-400">hasApiKey:</span>
+              <span className="flex items-center gap-1">
+                {hasApiKey ? (
+                  <>
+                    <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />
+                    <span className="text-green-500 font-bold">true</span>
+                  </>
+                ) : (
+                  <>
+                    <XCircle className="w-3.5 h-3.5 text-red-500" />
+                    <span className="text-red-500 font-bold">false</span>
+                  </>
+                )}
+              </span>
             </div>
 
-            <div className="mt-6 text-center">
-              <button
-                type="button"
-                onClick={() => setIsLogin(!isLogin)}
-                className="text-sm font-medium text-red-500 hover:text-red-400 transition-colors"
-              >
-                {isLogin ? 'Нет аккаунта? Зарегистрироваться' : 'Уже есть аккаунт? Войти'}
-              </button>
+            <div className="flex justify-between items-center py-1 border-b border-zinc-800/60">
+              <span className="text-zinc-400">apiKeyLength:</span>
+              <span className={apiKeyLength > 0 ? "text-green-400 font-bold" : "text-red-400"}>
+                {apiKeyLength}
+              </span>
             </div>
+
+            <div className="flex justify-between items-center py-1 border-b border-zinc-800/60">
+              <span className="text-zinc-400">apiKeyPrefix:</span>
+              <span className="text-zinc-300 bg-zinc-950 px-1.5 py-0.5 rounded text-[10px]">
+                {apiKeyLength > 0 ? `${apiKeyPrefix}...` : 'нет ключа'}
+              </span>
+            </div>
+
+            <div className="flex justify-between items-center py-1 border-b border-zinc-800/60">
+              <span className="text-zinc-400">projectId:</span>
+              <span className="text-zinc-300">{projectId || 'нет значения'}</span>
+            </div>
+
+            <div className="flex justify-between items-center py-1 border-b border-zinc-800/60">
+              <span className="text-zinc-400">authDomain:</span>
+              <span className="text-zinc-300 truncate max-w-[200px]" title={authDomain}>
+                {authDomain || 'нет значения'}
+              </span>
+            </div>
+
+            <div className="flex justify-between items-center py-1">
+              <span className="text-zinc-400">appIdExists:</span>
+              <span className="flex items-center gap-1">
+                {appIdExists ? (
+                  <>
+                    <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />
+                    <span className="text-green-500 font-bold">true</span>
+                  </>
+                ) : (
+                  <>
+                    <XCircle className="w-3.5 h-3.5 text-red-500" />
+                    <span className="text-red-500 font-bold">false</span>
+                  </>
+                )}
+              </span>
+            </div>
+          </div>
+          
+          <div className="mt-3 bg-zinc-950 p-2 rounded text-[10px] text-zinc-500 leading-normal">
+            Если <strong className="text-zinc-300">hasApiKey</strong> равен <strong className="text-red-400">false</strong>, добавьте <code className="text-red-300 select-all font-semibold">VITE_FIREBASE_API_KEY</code> в настройки окружения в левом/верхнем меню настроек.
           </div>
         </div>
       </div>

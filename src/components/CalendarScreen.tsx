@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, HelpCircle, X, CheckCircle2, AlertTriangle, FileText, Info } from 'lucide-react';
+import { apiFetch } from '../lib/api';
 
 interface CalendarDayMetric {
   date: string;
@@ -84,7 +85,7 @@ export default function CalendarScreen({ metrics, isAdmin, onNavigateToTab }: Ca
 
     setIsLoadingDetail(true);
     setDetailError(null);
-    fetch(`/api/day-detail?date=${selectedDate}`)
+    apiFetch(`/api/day-detail?date=${selectedDate}`)
       .then(res => {
         if (!res.ok) throw new Error('Ошибка связи с сервером');
         return res.json();

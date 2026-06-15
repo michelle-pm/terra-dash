@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { TrendingUp, AlertTriangle, FileSpreadsheet, Percent, AlertCircle, ArrowUpRight, Ban, Zap } from 'lucide-react';
+import { apiFetch } from '../lib/api';
 
 const getTodayStr = () => {
   const d = new Date();
@@ -161,7 +162,7 @@ export default function DashboardScreen({
 
   const fetchFilteredData = (s: string, e: string) => {
     setLoading(true);
-    fetch(`/api/dashboard?start=${s}&end=${e}`)
+    apiFetch(`/api/dashboard?start=${s}&end=${e}`)
       .then(res => res.json())
       .then(resData => {
         setLocalData(resData);

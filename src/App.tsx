@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { auth } from './firebase';
+import { auth, isFirebaseConfigMissing } from './firebase';
+import { apiFetch } from './lib/api';
 import AuthScreen from './components/AuthScreen';
 import Header from './components/Header';
 import DashboardScreen from './components/DashboardScreen';
@@ -76,7 +77,7 @@ export default function App() {
     if (!user) return;
     setIsLoading(true);
     // Fetch DB states
-    const p1 = fetch('/api/db')
+    const p1 = apiFetch('/api/db')
       .then(res => res.json())
       .then(data => {
         setDbState(data.db);
@@ -84,14 +85,14 @@ export default function App() {
       });
 
     // Fetch Calendar summary metrics
-    const p2 = fetch('/api/calendar-metrics')
+    const p2 = apiFetch('/api/calendar-metrics')
       .then(res => res.json())
       .then(data => {
         setCalendarMetrics(data.metrics);
       });
 
     // Fetch compiled dashboard analytical aggregations
-    const p3 = fetch('/api/dashboard')
+    const p3 = apiFetch('/api/dashboard')
       .then(res => res.json())
       .then(data => {
         setDashboardState(data);
@@ -113,6 +114,31 @@ export default function App() {
     }
   }, [user]);
 
+  if (isFirebaseConfigMissing) {
+    return (
+      <div className="min-h-screen bg-zinc-950 flex items-center justify-center p-6 text-[#EDEDED] font-sans">
+        <div className="max-w-md w-full bg-[#0A0A0A] border border-red-500/35 rounded-2xl p-6 shadow-2xl relative overflow-hidden">
+          <div className="absolute top-0 left-0 w-full h-[3px] bg-red-600" />
+          <div className="flex flex-col items-center text-center">
+            <span className="p-3 bg-red-500/10 rounded-full text-red-500 mb-4 animate-pulse">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+            </span>
+            <h1 className="text-lg font-bold text-white mb-2">Отсутствует VITE_FIREBASE_API_KEY</h1>
+            <p className="text-xs text-zinc-400 mb-4 leading-relaxed">
+              В конфигурации клиента отсутствует переменная окружения <code className="bg-zinc-900 px-1.5 py-0.5 rounded text-red-400 font-mono">VITE_FIREBASE_API_KEY</code>. Пожалуйста, сопоставьте API-ключ Firebase клиента в настройках.
+            </p>
+            <div className="w-full text-left bg-zinc-900/60 rounded-lg p-3.5 border border-zinc-800 text-[11px] text-zinc-400 space-y-2 leading-relaxed">
+              <p className="font-mono text-zinc-300">Добавьте в глобальные настройки или файл .env:</p>
+              <pre className="font-mono text-xs text-red-400 overflow-x-auto select-all p-1.5 bg-[#050505] rounded">VITE_FIREBASE_API_KEY=ваш_api_key</pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (!authInitialized) {
      return <div className="min-h-screen bg-zinc-950 flex items-center justify-center text-zinc-400">Загрузка...</div>;
   }
@@ -123,7 +149,7 @@ export default function App() {
 
   // Sandbox: Toggle between Admin and Viewer role profiles
   const toggleRole = () => {
-    fetch('/api/role/toggle', { method: 'POST' })
+    apiFetch('/api/role/toggle', { method: 'POST' })
       .then(res => res.json())
       .then(data => {
         showToast(`Профиль изменен на: ${data.role === 'Admin' ? 'Администратор' : 'Наблюдатель'}`);
@@ -135,7 +161,7 @@ export default function App() {
   const triggerDemoLoad = () => {
     if (!confirm('Вы хотите перезаписать текущие данные демонстрационными? Это займет секунду.')) return;
     setIsLoading(true);
-    fetch('/api/db/demo', { method: 'POST' })
+    apiFetch('/api/db/demo', { method: 'POST' })
       .then(res => res.json())
       .then(() => {
         showToast('Демонстрационная модель Терра Алтая успешно загружена!');
@@ -147,7 +173,7 @@ export default function App() {
   const triggerPurge = () => {
     if (!confirm('Внимание! Все загруженные файлы годовых отчетов, ручные изменения тарифов и связи категорий будут безвозвратно удалены. Продолжить?')) return;
     setIsLoading(true);
-    fetch('/api/db/clear', { method: 'POST' })
+    apiFetch('/api/db/clear', { method: 'POST' })
       .then(res => res.json())
       .then(() => {
         showToast('База данных полностью сброшена в исходное состояние!');

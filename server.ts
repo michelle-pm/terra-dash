@@ -3,6 +3,8 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import multer from 'multer';
+import { initializeApp, getApps, cert } from 'firebase-admin/app';
+import { getAuth } from 'firebase-admin/auth';
 import { createServer as createViteServer } from 'vite';
 import {
   readDatabase,
@@ -16,7 +18,8 @@ import {
   getInitialDatabase,
   expandPeriodToDays,
   getAltaiTodayStr,
-  parseBookingsReport
+  parseBookingsReport,
+  syncDatabaseAtBoot
 } from './src/serverDb';
 import { CategoryMapping } from './src/types';
 
@@ -26,10 +29,135 @@ if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 }
 
+// Initialize firebase-admin SDK
+const hasFirebaseAdminConfig = !!(
+  process.env.FIREBASE_PROJECT_ID &&
+  process.env.FIREBASE_CLIENT_EMAIL &&
+  process.env.FIREBASE_PRIVATE_KEY
+);
+
+console.log("=== Проверка конфигурации Firebase Admin ===");
+console.log(`FIREBASE_PROJECT_ID: ${process.env.FIREBASE_PROJECT_ID ? 'ПРИСУТСТВУЕТ' : 'ОТСУТСТВУЕТ'}`);
+console.log(`FIREBASE_CLIENT_EMAIL: ${process.env.FIREBASE_CLIENT_EMAIL ? 'ПРИСУТСТВУЕТ' : 'ОТСУТСТВУЕТ'}`);
+console.log(`FIREBASE_PRIVATE_KEY: ${process.env.FIREBASE_PRIVATE_KEY ? 'ПРИСУТСТВУЕТ' : 'ОТСУТСТВУЕТ'}`);
+console.log(`DEV_AUTH_BYPASS: ${process.env.DEV_AUTH_BYPASS === 'true' ? 'ВКЛЮЧЕН' : 'ВЫКЛЮЧЕН'}`);
+console.log(`NODE_ENV: ${process.env.NODE_ENV}`);
+
+if (!hasFirebaseAdminConfig) {
+  if (process.env.NODE_ENV === "production") {
+    console.error("КРИТИЧЕСКАЯ ОШИБКА: Сервер запущен в режиме PRODUCTION, но переменные окружения FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL и FIREBASE_PRIVATE_KEY не заданы!");
+  } else {
+    console.warn("ПРЕДУПРЕЖДЕНИЕ: Переменные окружения Firebase Admin не настроены. Полноценная авторизация будет недоступна. Для локальной разработки используйте DEV_AUTH_BYPASS=true.");
+  }
+}
+
+if (getApps().length === 0) {
+  if (hasFirebaseAdminConfig) {
+    const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n");
+    initializeApp({
+      credential: cert({
+        projectId: process.env.FIREBASE_PROJECT_ID,
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+        privateKey: privateKey,
+      }),
+      databaseURL: process.env.FIREBASE_DATABASE_URL,
+    });
+    console.log("Firebase Admin SDK успешно инициализирован с использованием Сертификата безопасности.");
+  } else {
+    initializeApp({
+      projectId: "terra-dashboard-acaab"
+    });
+    console.log("Firebase Admin SDK запущен с использованием проекта по умолчанию.");
+  }
+}
+
 const app = express();
 const PORT = 3000;
 
 app.use(express.json());
+
+// Bypass state storage for local dev
+let bypassRole = 'Admin';
+
+// Token Verification Middleware
+const authMiddleware = async (req: any, res: any, next: any) => {
+  if (req.path === '/api/health' || req.path === '/api/db/restore-backup') {
+    return next();
+  }
+
+  // Support clearly marked DEV_AUTH_BYPASS=true mode only when NODE_ENV !== "production"
+  if (
+    process.env.NODE_ENV !== "production" &&
+    process.env.DEV_AUTH_BYPASS === "true"
+  ) {
+    req.user = {
+      uid: "dev-admin-uid",
+      email: "dev-admin@terra.altaya",
+      role: bypassRole,
+      propertyIds: ["terra_altaya"]
+    };
+    req.role = bypassRole;
+    return next();
+  }
+
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Требуется аутентификация пользователя (ID Token отсутствует).' });
+  }
+
+  const token = authHeader.split('Bearer ')[1];
+  try {
+    const decodedToken = await getAuth().verifyIdToken(token);
+    
+    // Normalization of claim role: can be admin/viewer (case-insensitive)
+    let role = decodedToken.role;
+    if (!role) {
+      const email = decodedToken.email || '';
+      if (email.toLowerCase().includes('admin') || email.toLowerCase() === 'pm.michelle@terra.altaya') {
+        role = 'Admin';
+        try {
+          await getAuth().setCustomUserClaims(decodedToken.uid, { role: 'Admin' });
+        } catch (claimsErr) {
+          console.error('Failed to set Admin custom claim:', claimsErr);
+        }
+      } else {
+        role = 'Viewer';
+        try {
+          await getAuth().setCustomUserClaims(decodedToken.uid, { role: 'Viewer' });
+        } catch (claimsErr) {
+          console.error('Failed to set Viewer custom claim:', claimsErr);
+        }
+      }
+    }
+
+    const normalizedRole = (role === 'admin' || role === 'Admin') ? 'Admin' : 'Viewer';
+
+    req.user = {
+      uid: decodedToken.uid,
+      email: decodedToken.email,
+      role: normalizedRole,
+      propertyIds: decodedToken.propertyIds || []
+    };
+    req.role = normalizedRole;
+
+    next();
+  } catch (err: any) {
+    console.error('Firebase Auth error server verification:', err);
+
+    const errMsg = err?.message || String(err);
+    if (errMsg.includes("SERVICE_DISABLED") || errMsg.includes("identitytoolkit")) {
+      return res.status(401).json({
+        error: "В Firebase проекте не включен Authentication / Identity Toolkit API. Включите Authentication в Firebase Console."
+      });
+    }
+
+    return res.status(401).json({ 
+      error: 'Не удалось проверить авторизацию Firebase. Проверьте, что Firebase Authentication включен и Identity Toolkit API активирован.' 
+    });
+  }
+};
+
+app.use('/api', authMiddleware);
 
 // Set up Multer for Excel file uploads
 const storage = multer.diskStorage({
@@ -62,38 +190,50 @@ function getDbDateRange(db: any): string[] {
   return Array.from(dates).sort();
 }
 
-// Ensure database is initialized
-const testDb = readDatabase();
-if (testDb.imports.length === 0) {
-  // Let's seed with demo, but provide an empty state option
-  populateDemoData();
-}
-
 // API Routes
-app.get('/api/db', (req, res) => {
+app.get('/api/db', (req: any, res) => {
   const db = readDatabase();
   const summary = {
     importsCount: db.imports.length,
     revenueRows: db.revenueData.length,
     priceRows: db.priceData.length,
     correctionsCount: db.correctionLog.length,
-    role: db.role,
+    role: req.role || 'Viewer',
     hasRevenue: db.revenueData.length > 0,
     hasPrices: db.priceData.length > 0
   };
-  res.json({ db, summary });
+  res.json({ db: { ...db, role: req.role || 'Viewer' }, summary });
 });
 
-// Switch roles (Admin/Viewer)
-app.post('/api/role/toggle', (req, res) => {
-  const db = readDatabase();
-  db.role = db.role === 'Admin' ? 'Viewer' : 'Admin';
-  writeDatabase(db);
-  res.json({ role: db.role });
+// Switch roles (Admin/Viewer) - Dev Only
+app.post('/api/role/toggle', async (req: any, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(403).json({ error: 'Функция тестирования ролей заблокирована в Продакшне.' });
+  }
+  
+  if (process.env.DEV_AUTH_BYPASS === 'true') {
+    bypassRole = bypassRole === 'Admin' ? 'Viewer' : 'Admin';
+    return res.json({ role: bypassRole });
+  }
+  
+  const uid = req.user.uid;
+  const currentRole = req.role;
+  const newRole = currentRole === 'Admin' ? 'Viewer' : 'Admin';
+  
+  try {
+    await getAuth().setCustomUserClaims(uid, { role: newRole });
+    res.json({ role: newRole });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// Reset database to completely empty state
-app.post('/api/db/clear', (req, res) => {
+// Reset database to completely empty state - Admin Only
+app.post('/api/db/clear', (req: any, res) => {
+  if (req.role !== 'Admin') {
+    return res.status(403).json({ error: 'Недостаточно прав. Требуется роль Администратора.' });
+  }
+
   const db = getInitialDatabase();
   // Empty uploads directory too
   try {
@@ -105,21 +245,25 @@ app.post('/api/db/clear', (req, res) => {
     console.error('Error clearing uploads:', err);
   }
   writeDatabase(db);
-  res.json({ status: 'ok', db });
+  res.json({ status: 'ok', db: { ...db, role: req.role } });
 });
 
-// Load standard demo data
-app.post('/api/db/demo', (req, res) => {
-  const db = populateDemoData();
-  res.json({ status: 'ok', db });
-});
-
-// Update standard categories mapping
-app.post('/api/mapping/update', (req, res) => {
-  const db = readDatabase();
-  if (db.role !== 'Admin') {
+// Load standard demo data - Admin Only
+app.post('/api/db/demo', (req: any, res) => {
+  if (req.role !== 'Admin') {
     return res.status(403).json({ error: 'Недостаточно прав. Требуется роль Администратора.' });
   }
+
+  const db = populateDemoData();
+  res.json({ status: 'ok', db: { ...db, role: req.role } });
+});
+
+// Update standard categories mapping - Admin Only
+app.post('/api/mapping/update', (req: any, res) => {
+  if (req.role !== 'Admin') {
+    return res.status(403).json({ error: 'Недостаточно прав. Требуется роль Администратора.' });
+  }
+  const db = readDatabase();
   const newMappings: CategoryMapping[] = req.body.mappings;
   if (Array.isArray(newMappings)) {
     db.mappings = newMappings;
@@ -144,9 +288,9 @@ const uploadMiddleware = (req: express.Request, res: express.Response, next: exp
 };
 
 // File parser & transient preview route
-app.post('/api/upload', uploadMiddleware, (req, res) => {
+app.post('/api/upload', uploadMiddleware, (req: any, res) => {
   const db = readDatabase();
-  if (db.role !== 'Admin') {
+  if (req.role !== 'Admin') {
     if (req.file) {
       try { fs.unlinkSync(req.file.path); } catch {}
     }
@@ -221,9 +365,9 @@ app.post('/api/upload', uploadMiddleware, (req, res) => {
 });
 
 // Confirms pending import and merges records idempotently
-app.post('/api/confirm-import', (req, res) => {
+app.post('/api/confirm-import', (req: any, res) => {
   const db = readDatabase();
-  if (db.role !== 'Admin') {
+  if (req.role !== 'Admin') {
     return res.status(403).json({ error: 'Подтверждение доступно только Администраторам.' });
   }
 
@@ -269,9 +413,9 @@ app.get('/api/bookings', (req, res) => {
 });
 
 // Upload and parse bookings report (can be general or salesperson-specific)
-app.post('/api/bookings/upload', uploadMiddleware, (req, res) => {
+app.post('/api/bookings/upload', uploadMiddleware, (req: any, res) => {
   const db = readDatabase() as any;
-  if (db.role !== 'Admin') {
+  if (req.role !== 'Admin') {
     if (req.file) {
       try { fs.unlinkSync(req.file.path); } catch {}
     }
@@ -326,9 +470,9 @@ app.post('/api/bookings/upload', uploadMiddleware, (req, res) => {
 });
 
 // Clear custom bookings
-app.post('/api/bookings/clear', (req, res) => {
+app.post('/api/bookings/clear', (req: any, res) => {
   const db = readDatabase() as any;
-  if (db.role !== 'Admin') {
+  if (req.role !== 'Admin') {
     return res.status(403).json({ error: 'Очистка бронирований доступна только Администраторам.' });
   }
   db.bookings = [];
@@ -337,9 +481,9 @@ app.post('/api/bookings/clear', (req, res) => {
 });
 
 // Cancels or Deletes an import run
-app.post('/api/delete-import', (req, res) => {
+app.post('/api/delete-import', (req: any, res) => {
   const db = readDatabase();
-  if (db.role !== 'Admin') {
+  if (req.role !== 'Admin') {
     return res.status(403).json({ error: 'Удаление доступно только Администраторам.' });
   }
 
@@ -374,9 +518,9 @@ app.post('/api/delete-import', (req, res) => {
 });
 
 // Update manually assigned future prices (tariffs)
-app.post('/api/tariff/update', (req, res) => {
+app.post('/api/tariff/update', (req: any, res) => {
   const db = readDatabase();
-  if (db.role !== 'Admin') {
+  if (req.role !== 'Admin') {
     return res.status(403).json({ error: 'Редактирование тарифов доступно только Администраторам.' });
   }
 
@@ -881,7 +1025,121 @@ app.get('/api/forecast', (req, res) => {
   });
 });
 
+app.get('/api/export', async (req: any, res) => {
+  const db = readDatabase();
+  const { target, format, startDate, endDate } = req.query;
+
+  const dates = getDbDateRange(db);
+  let filteredDates = dates;
+  if (startDate && typeof startDate === 'string' && endDate && typeof endDate === 'string') {
+    filteredDates = dates.filter(d => d >= startDate && d <= endDate);
+  }
+
+  let csvData = '';
+  const BOM = '\uFEFF';
+
+  if (target === 'dashboard' || target === 'calendar') {
+    const dailyMetrics = filteredDates.map(day => {
+      return calculateMetricsForDay(day, db.revenueData, db.priceData, db.mappings, db.tariffs);
+    });
+
+    if (format === 'csv') {
+      csvData += `Дата;Активные юниты;Занятые юниты;Потенциальный доход;Фактический доход;Упущенный доход;Процент загрузки;Загубленный тариф без завтрака\n`;
+      dailyMetrics.forEach(m => {
+        const occupancy = m.activeUnits > 0 ? (m.occupiedUnits / m.activeUnits) * 100 : 0;
+        csvData += `${m.date};${m.activeUnits};${m.occupiedUnits};${m.potentialRevenue};${m.actualRevenue};${m.lostRevenue};${occupancy.toFixed(1)};${m.vacantValue}\n`;
+      });
+
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="Terra_Altaya_Revenue_Export_${new Date().toISOString().split('T')[0]}.csv"`);
+      return res.send(BOM + csvData);
+    } else if (format === 'xls') {
+      try {
+        const XLSX = await import('xlsx');
+        const rows = dailyMetrics.map(m => ({
+          'Дата': m.date,
+          'День недели': m.weekday,
+          'Всего мест (активно)': m.activeUnits,
+          'Занято мест': m.occupiedUnits,
+          'Загрузка %': m.activeUnits > 0 ? parseFloat(((m.occupiedUnits / m.activeUnits) * 100).toFixed(1)) : 0,
+          'Потенциальный Доход (руб)': m.potentialRevenue,
+          'Фактический Доход (руб)': m.actualRevenue,
+          'Упущенная Выгода (руб)': m.lostRevenue,
+          'Стоимость пустующих комнат': m.vacantValue
+        }));
+
+        const ws = XLSX.utils.json_to_sheet(rows);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Выручка по дням');
+
+        const totalRow = {
+          'Дата': 'ИТОГО / СРЕДНЕЕ',
+          'День недели': '',
+          'Всего мест (активно)': dailyMetrics.reduce((sum, x) => sum + x.activeUnits, 0),
+          'Занято мест': dailyMetrics.reduce((sum, x) => sum + x.occupiedUnits, 0),
+          'Загрузка %': dailyMetrics.length > 0 ? parseFloat((dailyMetrics.reduce((sum, x) => (x.activeUnits > 0 ? (x.occupiedUnits / x.activeUnits) * 100 : 0), 0) / dailyMetrics.length).toFixed(1)) : 0,
+          'Потенциальный Доход (руб)': dailyMetrics.reduce((sum, x) => sum + x.potentialRevenue, 0),
+          'Фактический Доход (руб)': dailyMetrics.reduce((sum, x) => sum + x.actualRevenue, 0),
+          'Упущенная Выгода (руб)': dailyMetrics.reduce((sum, x) => sum + x.lostRevenue, 0),
+          'Стоимость пустующих комнат': dailyMetrics.reduce((sum, x) => sum + x.vacantValue, 0)
+        };
+        XLSX.utils.sheet_add_json(ws, [totalRow], { skipHeader: true, origin: -1 });
+
+        const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename="Terra_Altaya_Revenue_Export_${new Date().toISOString().split('T')[0]}.xlsx"`);
+        return res.send(buf);
+      } catch (err) {
+        console.error('XLSX writing error:', err);
+        return res.status(500).json({ error: 'Не удалось сгенерировать Excel файл.' });
+      }
+    }
+  } else if (target === 'logs') {
+    if (format === 'csv') {
+      csvData += `Дата изменения;Тип;Показатель;Юнит/Категория;Старое значение;Новое значение;Файл-источник;Администратор\n`;
+      db.correctionLog.forEach(log => {
+        csvData += `${log.changedAt};${log.entityType};${log.fieldName};${log.entityId};${log.oldValue};${log.newValue};${log.sourceFile};${log.user}\n`;
+      });
+
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="Terra_Altaya_Audit_Trail_${new Date().toISOString().split('T')[0]}.csv"`);
+      return res.send(BOM + csvData);
+    } else if (format === 'xls') {
+      try {
+        const XLSX = await import('xlsx');
+        const rows = db.correctionLog.map(log => ({
+          'Дата изменения': new Date(log.changedAt).toLocaleString('ru-RU'),
+          'Сущность': log.entityType === 'price' ? 'Тариф' : 'Выручка',
+          'Поле': log.fieldName,
+          'Код / Категория': log.entityId,
+          'Старое значение': log.oldValue,
+          'Новое значение': log.newValue,
+          'Файл источник': log.sourceFile,
+          'Юзер': log.user
+        }));
+
+        const ws = XLSX.utils.json_to_sheet(rows);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Журнал изменений');
+
+        const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename="Terra_Altaya_Audit_Trail_${new Date().toISOString().split('T')[0]}.xlsx"`);
+        return res.send(buf);
+      } catch (err) {
+        console.error('XLSX log writing error:', err);
+        return res.status(500).json({ error: 'Не удалось сгенерировать Excel-журнал.' });
+      }
+    }
+  }
+
+  res.status(400).json({ error: 'Неизвестный параметр экспорта' });
+});
+
 async function startServer() {
+  console.log("Starting secure cloud boot synchronization...");
+  await syncDatabaseAtBoot();
+
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },

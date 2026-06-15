@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { ALL_BOOKINGS, MANAGERS, Booking, ManagerPerformance } from '../data/bookingData';
+import { apiFetch } from '../lib/api';
 import { 
   Calendar, 
   DollarSign, 
@@ -60,7 +61,7 @@ export default function BookingsScreen() {
   const fetchBookings = async () => {
     setIsLoading(true);
     try {
-      const res = await fetch('/api/bookings');
+      const res = await apiFetch('/api/bookings');
       if (res.ok) {
         const data = await res.json();
         if (data && Array.isArray(data.bookings)) {
@@ -95,7 +96,7 @@ export default function BookingsScreen() {
     formData.append('clearExisting', String(clearExisting));
 
     try {
-      const res = await fetch('/api/bookings/upload', {
+      const res = await apiFetch('/api/bookings/upload', {
         method: 'POST',
         body: formData,
       });
@@ -140,7 +141,7 @@ export default function BookingsScreen() {
       return;
     }
     try {
-      const res = await fetch('/api/bookings/clear', { method: 'POST' });
+      const res = await apiFetch('/api/bookings/clear', { method: 'POST' });
       if (res.ok) {
         setDbBookings([]);
         setUploadMessage({ type: 'success', text: 'Данные успешно сброшены к стандартному шаблону.' });

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { DownloadCloud, FileSpreadsheet, FileText, CheckCircle2, Clipboard } from 'lucide-react';
+import { apiFetch } from '../lib/api';
 import { ImportRun, CorrectionLog } from '../types';
 
 interface ExportScreenProps {
@@ -14,47 +15,44 @@ export default function ExportScreen({ logsList, importsList, hasRevenue }: Expo
   const [downloadSuccess, setDownloadSuccess] = useState<string | null>(null);
 
   // Robust client-side Cyrillic CSV downloader
-  const handleExport = () => {
-    let csvContent = '';
-    let fileName = '';
-
-    // Prefix UTF-8 BOM so Russian Microsoft Excel opens Cyrillic letters cleanly
-    const BOM = '\uFEFF';
-
-    if (exportTarget === 'dashboard') {
-      fileName = `Terra_Altaya_Dashboard_${new Date().toISOString().split('T')[0]}.csv`;
-      csvContent += 'Параметр;Значение\n';
-      csvContent += 'Статус отчета;Проанализирован\n';
-      csvContent += `Дата формирования;${new Date().toLocaleDateString('ru-RU')}\n`;
-      csvContent += `Импортировано отчетов;${importsList.length} файлов\n`;
-      csvContent += `Длина лога изменений;${logsList.length} строк\n`;
-    } else if (exportTarget === 'logs') {
-      fileName = `Terra_Altaya_Audit_Trail_${new Date().toISOString().split('T')[0]}.csv`;
-      csvContent += 'Дата;Тип;Юнит;Показатель;Было;Стало;Файл;Автор\n';
-      logsList.forEach(log => {
-        csvContent += `"${new Date(log.changedAt).toLocaleString('ru-RU')}";"${log.entityType}";"${log.entityId}";"${log.fieldName}";"${log.oldValue}";"${log.newValue}";"${log.sourceFile}";"${log.user}"\n`;
-      });
-    } else {
-      fileName = `Terra_Altaya_Calendar_Sheet_${new Date().toISOString().split('T')[0]}.csv`;
-      csvContent += 'Дата;Тип файла;Распознано записей\n';
-      importsList.forEach(imp => {
-        csvContent += `"${new Date(imp.uploadedAt).toLocaleDateString('ru-RU')}";"${imp.fileType === 'yearly_revenue_report' ? 'Отчет Bnovo' : 'Прайслист'}";"${imp.rowsParsed}"\n`;
-      });
+  const handleExport = async () => {
+    if (exportFormat === 'pdf') {
+      alert('Экспорт в формат PDF временно недоступен. Пожалуйста, используйте формат Русская CSV или Сводная XLS.');
+      return;
     }
 
-    // Process dowload blob
-    const blob = new Blob([BOM + csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', fileName);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    const query = new URLSearchParams({
+      target: exportTarget,
+      format: exportFormat === 'xls' ? 'xls' : 'csv'
+    });
 
-    setDownloadSuccess(`Отчет "${fileName}" успешно сформирован и скачан.`);
-    setTimeout(() => setDownloadSuccess(null), 4000);
+    try {
+      const response = await apiFetch(`/api/export?${query.toString()}`);
+      if (!response.ok) {
+        throw new Error('Ошибка связи с сервером при формировании файла.');
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+
+      const ext = exportFormat === 'xls' ? 'xlsx' : 'csv';
+      const termName = exportTarget === 'logs' ? 'Audit_Trail' : 'Revenue_Export';
+      const fileName = `Terra_Altaya_${termName}_${new Date().toISOString().split('T')[0]}.${ext}`;
+
+      link.setAttribute('download', fileName);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+
+      setDownloadSuccess(`Отчет "${fileName}" успешно сформирован и скачан.`);
+      setTimeout(() => setDownloadSuccess(null), 4000);
+    } catch (err: any) {
+      console.error(err);
+      alert('Проблема при скачивании файла: ' + err.message);
+    }
   };
 
   return (

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Settings, Info, Save, ChevronRight, Activity, Calendar, ArrowUpRight } from 'lucide-react';
+import { apiFetch } from '../lib/api';
 
 interface TariffsScreenProps {
   categoriesList: string[];
@@ -52,7 +53,7 @@ export default function TariffsScreen({
     setIsUpdating(true);
     setEditError(null);
 
-    fetch('/api/tariff/update', {
+    apiFetch('/api/tariff/update', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

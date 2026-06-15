@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { UploadCloud, FileSpreadsheet, Check, AlertTriangle, Play, Trash2, Calendar, FileText, CheckCircle2 } from 'lucide-react';
+import { apiFetch } from '../lib/api';
 import { ImportRun } from '../types';
 
 interface ImportScreenProps {
@@ -94,7 +95,7 @@ export default function ImportScreen({
     formData.append('file', file);
     formData.append('fileType', fileType);
 
-    fetch('/api/upload', {
+    apiFetch('/api/upload', {
       method: 'POST',
       body: formData
     })
@@ -129,7 +130,7 @@ export default function ImportScreen({
 
   // Confirm and consolidate a pending import
   const confirmImport = (importId: string) => {
-    fetch('/api/confirm-import', {
+    apiFetch('/api/confirm-import', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ importId })
@@ -150,7 +151,7 @@ export default function ImportScreen({
   const deleteImport = (importId: string) => {
     if (!confirm('Вы действительно хотите удалить импорт? Все связанные данные будут полностью стерты.')) return;
 
-    fetch('/api/delete-import', {
+    apiFetch('/api/delete-import', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ importId })

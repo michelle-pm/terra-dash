@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Layers, ArrowRight, Save, HelpCircle, CheckCircle2, FileWarning, RefreshCw } from 'lucide-react';
+import { apiFetch } from '../lib/api';
 import { CategoryMapping } from '../types';
 
 interface MappingScreenProps {
@@ -42,7 +43,7 @@ export default function MappingScreen({
   // Submit mappings to Express API
   const saveMappings = () => {
     setIsSaving(true);
-    fetch('/api/mapping/update', {
+    apiFetch('/api/mapping/update', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mappings: localMappings })

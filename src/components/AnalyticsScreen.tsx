@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar, Line } from 'recharts';
 import { BarChart3, Filter, Calendar, Settings, DollarSign, DownloadCloud } from 'lucide-react';
+import { apiFetch } from '../lib/api';
 
 interface CategoryItem {
   category: string;
@@ -49,7 +50,7 @@ export default function AnalyticsScreen({ categoriesList }: AnalyticsScreenProps
       period
     });
 
-    fetch(`/api/analytics-metrics?${query.toString()}`)
+    apiFetch(`/api/analytics-metrics?${query.toString()}`)
       .then(res => {
         if (!res.ok) throw new Error('Ошибка связи с сервером');
         return res.json();
