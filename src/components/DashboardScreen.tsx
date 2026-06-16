@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { TrendingUp, AlertTriangle, FileSpreadsheet, Percent, AlertCircle, ArrowUpRight, Ban, Zap } from 'lucide-react';
-import { apiFetch } from '../lib/api';
+import { compileDashboardState } from '../lib/clientDbEngine';
 
 const getTodayStr = () => {
   const d = new Date();
@@ -103,6 +103,7 @@ interface DashboardMetrics {
 
 interface DashboardScreenProps {
   data: DashboardMetrics;
+  dbState: any;
   onNavigateToTab: (tab: string) => void;
   onLoadDemo: () => void;
   hasRevenue: boolean;
@@ -112,6 +113,7 @@ interface DashboardScreenProps {
 
 export default function DashboardScreen({
   data,
+  dbState,
   onNavigateToTab,
   onLoadDemo,
   hasRevenue,
@@ -165,17 +167,13 @@ export default function DashboardScreen({
 
   const fetchFilteredData = (s: string, e: string) => {
     setLoading(true);
-    apiFetch(`/api/dashboard?start=${s}&end=${e}`)
-      .then(res => res.json())
-      .then(resData => {
-        setLocalData(resData);
-      })
-      .catch(err => {
-        console.error('Failed to fetch dashboard data:', err);
-      })
-      .finally(() => {
-        setLoading(false);
-      });
+    try {
+      setLocalData(compileDashboardState(dbState, s, e) as DashboardMetrics);
+    } catch (err) {
+      console.error('Failed to compile dashboard data:', err);
+    } finally {
+      setLoading(false);
+    }
   };
   
   const formatCurrency = (val: number) => {

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { auth, isFirebaseConfigMissing } from './firebase';
-import { apiFetch } from './lib/api';
+import { get, ref, set } from 'firebase/database';
+import { auth, isFirebaseConfigMissing, rtdb } from './firebase';
 import AuthScreen from './components/AuthScreen';
 import Header from './components/Header';
 import DashboardScreen from './components/DashboardScreen';
@@ -16,6 +16,12 @@ import TariffsScreen from './components/TariffsScreen';
 import LogsScreen from './components/LogsScreen';
 import ExportScreen from './components/ExportScreen';
 import UsersScreen from './components/UsersScreen';
+import {
+  compileCalendarMetrics,
+  compileDashboardState,
+  getInitialDatabase,
+  populateDemoData
+} from './lib/clientDbEngine';
 
 import {
   Compass,
@@ -75,38 +81,64 @@ export default function App() {
   };
 
   // Central sync function
-  const refreshAllState = () => {
+  const refreshAllState = async () => {
     if (!user) return;
     setIsLoading(true);
-    // Fetch DB states
-    const p1 = apiFetch('/api/db')
-      .then(res => res.json())
-      .then(data => {
-        setDbState(data.db);
-        setSummaryState(data.summary);
-      });
 
-    // Fetch Calendar summary metrics
-    const p2 = apiFetch('/api/calendar-metrics')
-      .then(res => res.json())
-      .then(data => {
-        setCalendarMetrics(data.metrics);
-      });
+    try {
+      const snap = await get(ref(rtdb, 'properties/terra_altaya'));
+      const rawDb = snap.exists() ? snap.val() : {};
+      const defaults = getInitialDatabase();
 
-    // Fetch compiled dashboard analytical aggregations
-    const p3 = apiFetch('/api/dashboard')
-      .then(res => res.json())
-      .then(data => {
-        setDashboardState(data);
-      });
+      const db = {
+        ...defaults,
+        ...rawDb,
+        imports: Array.isArray(rawDb.imports)
+          ? rawDb.imports
+          : rawDb.imports && typeof rawDb.imports === 'object'
+            ? Object.values(rawDb.imports)
+            : defaults.imports,
+        revenueData: Array.isArray(rawDb.revenueData) ? rawDb.revenueData : defaults.revenueData,
+        priceData: Array.isArray(rawDb.priceData) ? rawDb.priceData : defaults.priceData,
+        bookings: Array.isArray(rawDb.bookings) ? rawDb.bookings : defaults.bookings,
+        mappings: Array.isArray(rawDb.mappings) ? rawDb.mappings : defaults.mappings,
+        correctionLog: Array.isArray(rawDb.correctionLog) ? rawDb.correctionLog : defaults.correctionLog,
+        tariffs: rawDb.tariffs && typeof rawDb.tariffs === 'object' ? rawDb.tariffs : defaults.tariffs,
+        role: rawDb.role || 'Admin'
+      };
 
-    Promise.all([p1, p2, p3])
-      .catch(err => {
-        console.error('Core synchronizations failed', err);
-      })
-      .finally(() => {
-        setIsLoading(false);
+      const summary = {
+        importsCount: db.imports.length,
+        revenueRows: db.revenueData.length,
+        priceRows: db.priceData.length,
+        mappingsCount: db.mappings.length,
+        hasRevenue: db.revenueData.length > 0,
+        hasPrices: db.priceData.length > 0
+      };
+
+      setDbState(db);
+      setSummaryState(summary);
+      setCalendarMetrics(compileCalendarMetrics(db));
+      setDashboardState(compileDashboardState(db));
+    } catch (err) {
+      console.error('Core Firebase synchronization failed', err);
+
+      const db = getInitialDatabase();
+
+      setDbState(db);
+      setSummaryState({
+        importsCount: 0,
+        revenueRows: 0,
+        priceRows: 0,
+        mappingsCount: db.mappings.length,
+        hasRevenue: false,
+        hasPrices: false
       });
+      setCalendarMetrics([]);
+      setDashboardState({ hasData: false });
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   // Run on start and when user becomes available
@@ -150,37 +182,39 @@ export default function App() {
   }
 
   // Sandbox: Toggle between Admin and Viewer role profiles
-  const toggleRole = () => {
-    apiFetch('/api/role/toggle', { method: 'POST' })
-      .then(res => res.json())
-      .then(data => {
-        showToast(`Профиль изменен на: ${data.role === 'Admin' ? 'Администратор' : 'Наблюдатель'}`);
-        refreshAllState();
-      });
+  const toggleRole = async () => {
+    const nextRole = role === 'Admin' ? 'Viewer' : 'Admin';
+    const nextDb = { ...(dbState || getInitialDatabase()), role: nextRole };
+
+    await set(ref(rtdb, 'properties/terra_altaya'), nextDb);
+
+    showToast(`Профиль изменен на: ${nextRole === 'Admin' ? 'Администратор' : 'Наблюдатель'}`);
+    refreshAllState();
   };
 
   // Sandbox: Populate full simulation demo dataset
-  const triggerDemoLoad = () => {
+  const triggerDemoLoad = async () => {
     if (!confirm('Вы хотите перезаписать текущие данные демонстрационными? Это займет секунду.')) return;
+
     setIsLoading(true);
-    apiFetch('/api/db/demo', { method: 'POST' })
-      .then(res => res.json())
-      .then(() => {
-        showToast('Демонстрационная модель Терра Алтая успешно загружена!');
-        refreshAllState();
-      });
+
+    const demoDb = { ...populateDemoData(), role };
+    await set(ref(rtdb, 'properties/terra_altaya'), demoDb);
+
+    showToast('Демонстрационная модель Терра Алтая успешно загружена!');
+    refreshAllState();
   };
 
   // Sandbox: Flush database entirely to blank empty initial states
-  const triggerPurge = () => {
+  const triggerPurge = async () => {
     if (!confirm('Внимание! Все загруженные файлы годовых отчетов, ручные изменения тарифов и связи категорий будут безвозвратно удалены. Продолжить?')) return;
+
     setIsLoading(true);
-    apiFetch('/api/db/clear', { method: 'POST' })
-      .then(res => res.json())
-      .then(() => {
-        showToast('База данных полностью сброшена в исходное состояние!');
-        refreshAllState();
-      });
+
+    await set(ref(rtdb, 'properties/terra_altaya'), { ...getInitialDatabase(), role });
+
+    showToast('База данных полностью сброшена в исходное состояние!');
+    refreshAllState();
   };
 
   const handleUpdateMappings = () => {
@@ -201,7 +235,11 @@ export default function App() {
   const role = dbState?.role || 'Admin';
   const isAdmin = role === 'Admin';
   
-  const imports: ImportRun[] = dbState?.imports || [];
+  const imports: ImportRun[] = Array.isArray(dbState?.imports)
+    ? dbState.imports
+    : (dbState?.imports && typeof dbState.imports === 'object')
+      ? Object.values(dbState.imports) as ImportRun[]
+      : [];
   const logs: CorrectionLog[] = dbState?.correctionLog || [];
   const mappings: CategoryMapping[] = dbState?.mappings || [];
 
@@ -209,8 +247,8 @@ export default function App() {
   const hasPrices = summaryState?.hasPrices || false;
 
   // Extract category lists
-  const reportCategories = dbState ? Array.from(new Set<string>(dbState.revenueData.map((r: any) => r.sourceCategory))) : [];
-  const priceListCategories = dbState ? Array.from(new Set<string>(dbState.priceData.map((p: any) => p.category))) : [];
+  const reportCategories = (dbState && Array.isArray(dbState.revenueData)) ? Array.from(new Set<string>(dbState.revenueData.map((r: any) => r.sourceCategory))) : [];
+  const priceListCategories = (dbState && Array.isArray(dbState.priceData)) ? Array.from(new Set<string>(dbState.priceData.map((p: any) => p.category))) : [];
 
   // Derive unmapped categories count
   const unmappedCount = reportCategories.filter(
@@ -416,6 +454,7 @@ export default function App() {
               {activeTab === 'dashboard' && (
                 <DashboardScreen
                   data={dashboardState || { hasData: false }}
+                  dbState={dbState}
                   onNavigateToTab={setActiveTab}
                   onLoadDemo={triggerDemoLoad}
                   hasRevenue={hasRevenue}

@@ -24,6 +24,14 @@ export default function ImportScreen({
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
 
+  const normalizedImports = useMemo(() => {
+    return Array.isArray(importsList)
+      ? importsList
+      : importsList && typeof importsList === 'object'
+        ? Object.values(importsList) as ImportRun[]
+        : [];
+  }, [importsList]);
+
   // Transient container for holding parsed data before confirmation
   const [parsedDataToConfirm, setParsedDataToConfirm] = useState<{
     fileType: 'yearly_revenue_report' | 'price_list';
@@ -39,7 +47,50 @@ export default function ImportScreen({
     importsCount: number;
     latestFileName: string;
     latestStatus: string;
+    isPriceList?: boolean;
+    format?: string;
+    categoriesCount?: number;
+    periodColumnsCount?: number;
+    dailyTariffRowsCount?: number;
+    firstTariffDate?: string | null;
+    lastTariffDate?: string | null;
+    potential_2026_06_15?: number;
+    potential_2026_06_16?: number;
   } | null>(null);
+
+  const calculatePotentialForDate = (db: any, date: string): number => {
+    const revs = db.revenueData || [];
+    const prices = db.priceData || [];
+    const mappings = db.mappings || [];
+    
+    const mapDict: { [source: string]: string } = {};
+    mappings.forEach((m: any) => {
+      if (m && m.sourceCategory && m.priceCategory) {
+        mapDict[m.sourceCategory] = m.priceCategory;
+      }
+    });
+
+    const dayRevs = revs.filter((r: any) => r.date === date);
+    const sourceCategories = Array.from(new Set(dayRevs.map((r: any) => r.sourceCategory as string)));
+    
+    let totalPotential = 0;
+    sourceCategories.forEach((sourceCat: string) => {
+      const unitsOfCat = dayRevs.filter((r: any) => r.sourceCategory === sourceCat);
+      const mappedPriceCat = mapDict[sourceCat] || sourceCat;
+      
+      let dailyPrice = 0;
+      if (db.tariffs && db.tariffs[mappedPriceCat] && db.tariffs[mappedPriceCat][date] !== undefined) {
+        dailyPrice = db.tariffs[mappedPriceCat][date];
+      } else {
+        const priceRecord = prices.find((p: any) => p.category === mappedPriceCat && p.date === date);
+        dailyPrice = priceRecord ? priceRecord.price : 0;
+      }
+      
+      totalPotential += unitsOfCat.length * dailyPrice;
+    });
+    
+    return totalPotential;
+  };
 
   // API health simulated mock data showing CPU client browser engine status
   const apiHealth = {
@@ -167,16 +218,17 @@ export default function ImportScreen({
 
     // Validate ext
     const name = file.name.toLowerCase();
-    if (fileType === 'yearly_revenue_report') {
-      if (!name.endsWith('.xls') && !name.endsWith('.xlsx') && !name.endsWith('.csv')) {
-        setUploadError('Неверный тип файла. Разрешены только форматы .xls, .xlsx и .csv для отчета Bnovo.');
-        return;
-      }
-    } else {
-      if (!name.endsWith('.xlsx')) {
-        setUploadError('Неверный тип файла. Разрешены только форматы .xlsx для Прайс-листа.');
-        return;
-      }
+    const allowedExtensionsByFileType = {
+      yearly_revenue_report: ['.xls', '.xlsx', '.csv'],
+      price_list: ['.xls', '.xlsx', '.csv']
+    };
+
+    const allowed = allowedExtensionsByFileType[fileType];
+    const isAllowed = allowed.some(ext => name.endsWith(ext));
+
+    if (!isAllowed) {
+      setUploadError(`Неверный тип файла. Для выбранного типа разрешены: ${allowed.join(', ')}`);
+      return;
     }
 
     setIsUploading(true);
@@ -303,6 +355,10 @@ export default function ImportScreen({
       }
 
       // Set diagnostics!
+      const isPriceList = parsedDataToConfirm.fileType === 'price_list';
+      const potential_2026_06_15 = calculatePotentialForDate(verifiedDb, '2026-06-15');
+      const potential_2026_06_16 = calculatePotentialForDate(verifiedDb, '2026-06-16');
+
       setDiagnostics({
         firebasePath: `properties/terra_altaya`,
         revenueCount: vRevenue.length,
@@ -310,7 +366,16 @@ export default function ImportScreen({
         bookingsCount: vBookings.length,
         importsCount: vImportsArray.length,
         latestFileName: importRun.fileName,
-        latestStatus: importRun.status
+        latestStatus: importRun.status,
+        isPriceList,
+        format: isPriceList ? (pendingPreview.preview as any).format : undefined,
+        categoriesCount: isPriceList ? (pendingPreview.preview as any).categoriesCount : undefined,
+        periodColumnsCount: isPriceList ? (pendingPreview.preview as any).periodColumnsCount : undefined,
+        dailyTariffRowsCount: isPriceList ? (pendingPreview.preview as any).dailyTariffCount : undefined,
+        firstTariffDate: isPriceList ? (pendingPreview.preview as any).periodStart : null,
+        lastTariffDate: isPriceList ? (pendingPreview.preview as any).periodEnd : null,
+        potential_2026_06_15,
+        potential_2026_06_16
       });
 
       setPendingPreview(null);
@@ -345,11 +410,25 @@ export default function ImportScreen({
         
         let fileTypeToDelete = '';
         if (db.imports) {
-          const run = db.imports.find((imp: any) => imp.id === importId);
+          let importsListArray: any[] = [];
+          if (Array.isArray(db.imports)) {
+            importsListArray = db.imports;
+          } else if (typeof db.imports === 'object') {
+            importsListArray = Object.values(db.imports);
+          }
+
+          const run = importsListArray.find((imp: any) => imp && imp.id === importId);
           if (run) {
             fileTypeToDelete = run.fileType;
           }
-          db.imports = db.imports.filter((imp: any) => imp.id !== importId);
+
+          if (Array.isArray(db.imports)) {
+            db.imports = db.imports.filter((imp: any) => imp && imp.id !== importId);
+          } else if (typeof db.imports === 'object') {
+            const nextImports = { ...db.imports };
+            delete nextImports[importId];
+            db.imports = nextImports;
+          }
         }
 
         if (fileTypeToDelete === 'yearly_revenue_report') {
@@ -421,6 +500,56 @@ export default function ImportScreen({
               Статус: <span className="font-mono font-bold text-[#00E09D]">{diagnostics.latestStatus}</span>
             </div>
           </div>
+
+          {diagnostics.isPriceList && (
+            <div className="pt-2 border-t border-white/5 space-y-2 text-xs">
+              <div className="text-[#00E09D] font-bold">Детали прайс-листа:</div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2 font-mono text-zinc-300">
+                <div className="p-2 bg-black/20 border border-white/5 rounded-lg">
+                  <span className="text-zinc-500 uppercase text-[8px] font-bold block">Формат</span>
+                  <span className="font-bold text-zinc-100">{diagnostics.format?.toUpperCase()}</span>
+                </div>
+                <div className="p-2 bg-black/20 border border-white/5 rounded-lg">
+                  <span className="text-zinc-500 uppercase text-[8px] font-bold block">Категорий</span>
+                  <span className="font-bold text-zinc-100">{diagnostics.categoriesCount} шт</span>
+                </div>
+                <div className="p-2 bg-black/20 border border-white/5 rounded-lg">
+                  <span className="text-zinc-500 uppercase text-[8px] font-bold block font-sans">Колонок периодов</span>
+                  <span className="font-bold text-zinc-100">{diagnostics.periodColumnsCount} шт</span>
+                </div>
+                <div className="p-2 bg-black/20 border border-white/5 rounded-lg">
+                  <span className="text-zinc-500 uppercase text-[8px] font-bold block">Строк тарифов</span>
+                  <span className="font-bold text-zinc-100">{diagnostics.dailyTariffRowsCount} шт</span>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2 font-mono text-zinc-300">
+                <div className="p-2 bg-black/20 border border-white/5 rounded-lg">
+                  <span className="text-zinc-500 uppercase text-[8px] font-bold block">Первая дата</span>
+                  <span className="font-bold text-zinc-100">{diagnostics.firstTariffDate || '-'}</span>
+                </div>
+                <div className="p-2 bg-black/20 border border-white/5 rounded-lg">
+                  <span className="text-zinc-500 uppercase text-[8px] font-bold block">Последняя дата</span>
+                  <span className="font-bold text-zinc-100">{diagnostics.lastTariffDate || '-'}</span>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2 font-mono">
+                <div className="p-2 bg-black/20 border border-[#00E09D]/20 rounded-lg">
+                  <span className="text-emerald-500 uppercase text-[8px] font-bold block font-sans">Потенциал за 2026-06-15</span>
+                  <span className="font-bold text-emerald-400">{(diagnostics.potential_2026_06_15 ?? 0).toLocaleString()} ₽</span>
+                </div>
+                <div className="p-2 bg-black/20 border border-[#00E09D]/20 rounded-lg">
+                  <span className="text-emerald-500 uppercase text-[8px] font-bold block font-sans">Потенциал за 2026-06-16</span>
+                  <span className="font-bold text-emerald-400">{(diagnostics.potential_2026_06_16 ?? 0).toLocaleString()} ₽</span>
+                </div>
+              </div>
+              
+              {(((diagnostics.potential_2026_06_15 ?? 0) !== 534000) || ((diagnostics.potential_2026_06_16 ?? 0) !== 534000)) && (
+                <div className="p-2 bg-rose-500/10 border border-rose-500/20 text-rose-400 rounded-lg flex items-center gap-1 font-sans">
+                  <span className="font-bold">⚠️ Внимание! Контрольные значения не совпадают с ожидаемыми (534 000 ₽). Перепроверьте файлы прайс-листов.</span>
+                </div>
+              )}
+            </div>
+          )}
           
           <div className="flex justify-end pt-1">
             <button
@@ -525,7 +654,7 @@ export default function ImportScreen({
               >
                 <div className="flex items-center gap-2 mb-2">
                   <FileSpreadsheet className={`h-4.5 w-4.5 ${fileType === 'price_list' ? 'text-[#7C5CFF]' : 'text-zinc-500'}`} />
-                  <span className={`text-xs font-bold uppercase tracking-wider ${fileType === 'price_list' ? 'text-white' : 'text-[#71717A]'}`}>Прайслист Тарифов (.xlsx)</span>
+                  <span className={`text-xs font-bold uppercase tracking-wider ${fileType === 'price_list' ? 'text-white' : 'text-[#71717A]'}`}>Прайслист Тарифов (.xlsx, .xls, .csv)</span>
                 </div>
                 <p className="text-[11px] text-[#A1A1AA] mt-1 font-normal leading-normal">
                   Таблица периодов проживания и регламентированной базовой стоимости размещения в угодьях.
@@ -554,7 +683,7 @@ export default function ImportScreen({
               <input
                 ref={fileInputRef}
                 type="file"
-                accept={fileType === 'yearly_revenue_report' ? '.xls,.xlsx,.csv' : '.xlsx'}
+                accept={fileType === 'yearly_revenue_report' ? '.xls,.xlsx,.csv' : '.xlsx,.xls,.csv'}
                 onChange={handleFileChange}
                 disabled={isUploading}
                 className="hidden"
@@ -574,8 +703,8 @@ export default function ImportScreen({
                     </p>
                     <p className="text-[11px] text-[#71717A] font-mono mt-1.5 font-normal">
                       {fileType === 'yearly_revenue_report'
-                        ? 'Допустимы форматы .xls, .xlsx и .csv (максимум до 15МБ)'
-                        : 'Допустимы форматы .xlsx (максимум до 15МБ)'
+                        ? 'Допустимые форматы: .xls, .xlsx, .csv (максимум до 15МБ)'
+                        : 'Допустимые форматы: .xlsx, .xls, .csv (максимум до 15МБ)'
                       }
                     </p>
                   </div>
@@ -835,8 +964,8 @@ export default function ImportScreen({
           </h3>
 
           <div className="space-y-3.5 max-h-[490px] overflow-y-auto text-xs font-mono pr-1">
-            {importsList.length > 0 ? (
-              importsList.map((imp, idx) => (
+            {normalizedImports.length > 0 ? (
+              normalizedImports.map((imp, idx) => (
                 <div key={idx} className="p-3.5 bg-black/45 border border-white/5 rounded-xl space-y-2.5 relative group hover:border-white/10 transition-all">
                   
                   {/* Delete record floating button if Admin */}
@@ -870,7 +999,7 @@ export default function ImportScreen({
                       <span className="text-[#71717A]">Записей:</span> {imp.rowsParsed}
                     </div>
                     <div>
-                      <span className="text-[#71717A]">Варинги:</span> <span className={imp.errors.length + imp.warnings.length > 0 ? 'text-[#FFB020] font-bold' : 'text-[#71717A]'}>{imp.errors.length + imp.warnings.length}</span>
+                      <span className="text-[#71717A]">Варинги:</span> <span className={((imp.errors?.length || 0) + (imp.warnings?.length || 0)) > 0 ? 'text-[#FFB020] font-bold' : 'text-[#71717A]'}>{(imp.errors?.length || 0) + (imp.warnings?.length || 0)}</span>
                     </div>
                   </div>
 
@@ -885,6 +1014,10 @@ export default function ImportScreen({
                     }`}>
                       {imp.status === 'confirmed' ? 'Принят' : 'Ревизия'}
                     </span>
+                  </div>
+
+                  <div className="text-[10px] text-zinc-500 pt-1.5 border-t border-white/[0.01] italic leading-normal font-sans">
+                    Этот импорт уже применен. Для повторной загрузки выберите файл заново.
                   </div>
 
                 </div>
