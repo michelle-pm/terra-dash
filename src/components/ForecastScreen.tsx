@@ -1,6 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Sparkles, Calendar, AlertOctagon, TrendingDown, RefreshCw, BarChart2, ShieldAlert } from 'lucide-react';
-import { apiFetch } from '../lib/api';
+import { compileForecastState } from '../lib/clientDbEngine';
+
+interface ForecastScreenProps {
+  dbState: any;
+}
 
 interface RiskCategory {
   category: string;
@@ -18,26 +22,26 @@ interface ForecastData {
   periodDays: number;
 }
 
-export default function ForecastScreen() {
+export default function ForecastScreen({ dbState }: ForecastScreenProps) {
   const [daysPeriod, setDaysPeriod] = useState<30 | 60 | 90>(30);
   const [forecast, setForecast] = useState<ForecastData | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  // Load forecast metrics on change
+  // Load forecast metrics client-side
   useEffect(() => {
     setIsLoading(true);
-    apiFetch(`/api/forecast?periodDays=${daysPeriod}`)
-      .then(res => res.json())
-      .then(data => {
-        setForecast(data);
-      })
-      .catch(err => {
-        console.error('Forecast fetch details failed', err);
-      })
-      .finally(() => {
-        setIsLoading(false);
-      });
-  }, [daysPeriod]);
+    try {
+      if (!dbState) {
+        throw new Error('База данных пуста');
+      }
+      const data = compileForecastState(dbState, daysPeriod);
+      setForecast(data as any);
+    } catch (err) {
+      console.error('Forecast compilation failed', err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [daysPeriod, dbState]);
 
   const formatCurrency = (val: number) => {
     return new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(val);

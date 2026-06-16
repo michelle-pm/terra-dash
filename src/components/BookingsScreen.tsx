@@ -57,6 +57,16 @@ export default function BookingsScreen() {
     activeRevenue: number;
   } | null>(null);
 
+  const [diagnostics, setDiagnostics] = useState<{
+    firebasePath: string;
+    revenueCount: number;
+    priceCount: number;
+    bookingsCount: number;
+    importsCount: number;
+    latestFileName: string;
+    latestStatus: string;
+  } | null>(null);
+
   // High-fidelity date helper: local date boundaries
   // All bookings are centered around early 2026 up to dynamic Altai Time today.
   const getAltaiTodayStr = () => {
@@ -172,7 +182,7 @@ export default function BookingsScreen() {
   // Confirm and write to Firebase Database directly
   const handleUploadSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!uploadFile || !pendingBookings) {
+    if (!uploadFile || !pendingBookings || !bookingsPreview) {
       setUploadMessage({ type: 'error', text: 'Пожалуйста, сначала выберите и проанализируйте файл.' });
       return;
     }
@@ -189,6 +199,21 @@ export default function BookingsScreen() {
 
       if (!db.bookings) {
         db.bookings = [];
+      }
+      if (!db.imports) {
+        db.imports = {};
+      }
+
+      // Ensure imports is an object or array to avoid breaking
+      let importsMap: any = {};
+      if (db.imports) {
+        if (Array.isArray(db.imports)) {
+          db.imports.forEach((imp: any) => {
+            if (imp && imp.id) importsMap[imp.id] = imp;
+          });
+        } else if (typeof db.imports === 'object') {
+          importsMap = { ...db.imports };
+        }
       }
 
       let resultBookings = [];
@@ -207,9 +232,73 @@ export default function BookingsScreen() {
         resultBookings = currentBookings;
       }
 
+      // Create confirmed import record
+      const importId = 'bookings_imp_' + Math.random().toString(36).substr(2, 9);
+      const importRun = {
+        id: importId,
+        fileName: bookingsPreview.fileName,
+        fileType: 'bookings_registry' as const,
+        sourceKind: 'bookings_registry' as const,
+        uploadedBy: 'Администратор',
+        uploadedAt: new Date().toISOString(),
+        periodStart: null,
+        periodEnd: null,
+        rowsParsed: pendingBookings.length,
+        rowsInserted: pendingBookings.length,
+        rowsUpdated: 0,
+        warnings: [],
+        errors: [],
+        status: 'confirmed' as const
+      };
+
+      importsMap[importId] = importRun;
+
       // Record state back to Firebase RTDB
       db.bookings = resultBookings;
+      db.imports = importsMap;
+      db.hasDemoData = false;
+
       await set(ref(rtdb, path), db);
+
+      // IMMEDIATE READBACK VERIFICATION
+      const readbackSnap = await get(ref(rtdb, path));
+      if (!readbackSnap.exists()) {
+        throw new Error('Импорт записан некорректно: данные не найдены после сохранения.');
+      }
+
+      const verifiedDb = readbackSnap.val();
+      const vRevenue = verifiedDb.revenueData || [];
+      const vPrices = verifiedDb.priceData || [];
+      const vBookings = verifiedDb.bookings || [];
+
+      let vImportsArray: any[] = [];
+      if (verifiedDb.imports) {
+        if (Array.isArray(verifiedDb.imports)) {
+          vImportsArray = verifiedDb.imports;
+        } else if (typeof verifiedDb.imports === 'object') {
+          vImportsArray = Object.values(verifiedDb.imports);
+        }
+      }
+
+      const confirmedImportFound = vImportsArray.find((imp: any) => imp.id === importId && imp.status === 'confirmed');
+      if (!confirmedImportFound) {
+        throw new Error('Импорт записан некорректно: данные не найдены после сохранения.');
+      }
+
+      if (vBookings.length === 0) {
+        throw new Error('Импорт записан некорректно: данные не найдены после сохранения.');
+      }
+
+      // Set diagnostics!
+      setDiagnostics({
+        firebasePath: path,
+        revenueCount: vRevenue.length,
+        priceCount: vPrices.length,
+        bookingsCount: vBookings.length,
+        importsCount: vImportsArray.length,
+        latestFileName: importRun.fileName,
+        latestStatus: importRun.status
+      });
 
       setUploadMessage({
         type: 'success',
@@ -423,6 +512,55 @@ export default function BookingsScreen() {
 
   return (
     <div className="space-y-6 animate-fade-in" id="bookings_screen_container">
+      {/* POST-IMPORT READBACK DIAGNOSTICS */}
+      {diagnostics && (
+        <div className="p-5 rounded-2xl border border-indigo-500/30 bg-indigo-500/5 space-y-3 animate-fade-in text-sans">
+          <div className="flex items-center gap-2 text-indigo-400 font-bold text-sm">
+            <CheckCircle className="h-5 w-5" />
+            <span>Результаты верификации записи в Realtime Database</span>
+          </div>
+          
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono pt-1 text-zinc-300">
+            <div className="p-2.5 bg-black/40 border border-white/5 rounded-xl">
+              <span className="text-zinc-500 uppercase text-[9px] font-bold block">Путь записи</span>
+              <span className="font-bold text-emerald-400 mt-1 block truncate" title={diagnostics.firebasePath}>
+                {diagnostics.firebasePath}
+              </span>
+            </div>
+            <div className="p-2.5 bg-black/40 border border-white/5 rounded-xl">
+              <span className="text-zinc-500 uppercase text-[9px] font-bold block">Записей Bnovo (Revenue)</span>
+              <span className="font-bold mt-1 block">{diagnostics.revenueCount} шт</span>
+            </div>
+            <div className="p-2.5 bg-black/40 border border-white/5 rounded-xl">
+              <span className="text-zinc-500 uppercase text-[9px] font-bold block">Записей цен (Price)</span>
+              <span className="font-bold mt-1 block">{diagnostics.priceCount} шт</span>
+            </div>
+            <div className="p-2.5 bg-black/40 border border-white/5 rounded-xl">
+              <span className="text-zinc-500 uppercase text-[9px] font-bold block">Записей броней</span>
+              <span className="font-bold mt-1 block">{diagnostics.bookingsCount} шт</span>
+            </div>
+          </div>
+
+          <div className="pt-2 border-t border-white/5 flex flex-wrap justify-between items-center text-xs text-zinc-400">
+            <div>
+              Последний файл: <span className="font-mono text-zinc-100">{diagnostics.latestFileName}</span>
+            </div>
+            <div>
+              Статус: <span className="font-mono font-bold text-indigo-400">{diagnostics.latestStatus}</span>
+            </div>
+          </div>
+          
+          <div className="flex justify-end pt-1">
+            <button
+              onClick={() => setDiagnostics(null)}
+              className="text-[11px] text-zinc-400 hover:text-zinc-200 underline cursor-pointer"
+            >
+              Скрыть диагностику
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* HEADER */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-zinc-800 pb-4">
         <div>

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, HelpCircle, X, CheckCircle2, AlertTriangle, FileText, Info } from 'lucide-react';
-import { apiFetch } from '../lib/api';
+import { compileDayDetail } from '../lib/clientDbEngine';
 
 interface CalendarDayMetric {
   date: string;
@@ -15,6 +15,7 @@ interface CalendarScreenProps {
   metrics: CalendarDayMetric[];
   isAdmin: boolean;
   onNavigateToTab: (tab: string) => void;
+  dbState: any;
 }
 
 interface CategoryDetail {
@@ -59,7 +60,7 @@ interface DayDetailData {
   };
 }
 
-export default function CalendarScreen({ metrics, isAdmin, onNavigateToTab }: CalendarScreenProps) {
+export default function CalendarScreen({ metrics, isAdmin, onNavigateToTab, dbState }: CalendarScreenProps) {
   // Available Months selector derived from populated dates
   const availableMonths = [
     { label: 'Май 2026', year: 2026, month: 4 }, // JS Months are 0-indexed: May=4
@@ -85,22 +86,19 @@ export default function CalendarScreen({ metrics, isAdmin, onNavigateToTab }: Ca
 
     setIsLoadingDetail(true);
     setDetailError(null);
-    apiFetch(`/api/day-detail?date=${selectedDate}`)
-      .then(res => {
-        if (!res.ok) throw new Error('Ошибка связи с сервером');
-        return res.json();
-      })
-      .then(data => {
-        setDayDetail(data);
-      })
-      .catch(err => {
-        setDetailError('Не удалось загрузить детальные данные дня.');
-        console.error(err);
-      })
-      .finally(() => {
-        setIsLoadingDetail(false);
-      });
-  }, [selectedDate]);
+    try {
+      if (!dbState) {
+        throw new Error('База данных пуста');
+      }
+      const data = compileDayDetail(dbState, selectedDate);
+      setDayDetail(data);
+    } catch (err: any) {
+      setDetailError('Не удалось загрузить детальные данные дня.');
+      console.error(err);
+    } finally {
+      setIsLoadingDetail(false);
+    }
+  }, [selectedDate, dbState]);
 
   // Construct standard calendar matrix for the chosen month
   const getDaysInMonthMatrix = (year: number, monthNum: number) => {

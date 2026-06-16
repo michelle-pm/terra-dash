@@ -54,7 +54,7 @@ export default function Header({
         <div className="hidden md:flex items-center gap-4">
           <div className="flex items-center gap-1.5 rounded-full bg-[#0F0F0F] border border-[#1F1F1F] px-3 py-1 text-xs">
             <span className={`h-1.5 w-1.5 rounded-full ${hasRevenue ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-zinc-700'}`} />
-            <span className="text-zinc-400">Bnovo XLS:</span>
+            <span className="text-zinc-400">Отчет Bnovo:</span>
             <span className={`font-medium ${hasRevenue ? 'text-zinc-200' : 'text-zinc-500'}`}>
               {hasRevenue ? 'Активен' : 'Отсутствует'}
             </span>

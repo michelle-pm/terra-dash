@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Layers, ArrowRight, Save, HelpCircle, CheckCircle2, FileWarning, RefreshCw } from 'lucide-react';
-import { apiFetch } from '../lib/api';
+import { rtdb } from '../firebase';
 import { CategoryMapping } from '../types';
 
 interface MappingScreenProps {
@@ -40,25 +40,18 @@ export default function MappingScreen({
     });
   };
 
-  // Submit mappings to Express API
-  const saveMappings = () => {
+  // Submit mappings to Firebase RTDB
+  const saveMappings = async () => {
     setIsSaving(true);
-    apiFetch('/api/mapping/update', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mappings: localMappings })
-    })
-      .then(res => res.json())
-      .then(data => {
-        if (data.error) throw new Error(data.error);
-        onUpdateMappings(localMappings);
-      })
-      .catch(err => {
-        alert(err.message || 'Ошибка сохранения');
-      })
-      .finally(() => {
-        setIsSaving(false);
-      });
+    try {
+      const { ref, set } = await import('firebase/database');
+      await set(ref(rtdb, 'properties/terra_altaya/mappings'), localMappings);
+      onUpdateMappings(localMappings);
+    } catch (err: any) {
+      alert(err.message || 'Ошибка сохранения');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   // Check if mapping exists for a report category

@@ -429,14 +429,15 @@ export default function App() {
                   metrics={calendarMetrics}
                   isAdmin={isAdmin}
                   onNavigateToTab={setActiveTab}
+                  dbState={dbState}
                 />
               )}
 
               {activeTab === 'analytics' && (
-                <AnalyticsScreen categoriesList={reportCategories} />
+                <AnalyticsScreen categoriesList={reportCategories} dbState={dbState} />
               )}
 
-              {activeTab === 'forecast' && <ForecastScreen />}
+              {activeTab === 'forecast' && <ForecastScreen dbState={dbState} />}
 
               {activeTab === 'bookings' && <BookingsScreen />}
 

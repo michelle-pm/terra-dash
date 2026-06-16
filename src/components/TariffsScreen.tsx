@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Settings, Info, Save, ChevronRight, Activity, Calendar, ArrowUpRight } from 'lucide-react';
-import { apiFetch } from '../lib/api';
+import { rtdb } from '../firebase';
 
 interface TariffsScreenProps {
   categoriesList: string[];
@@ -38,7 +38,7 @@ export default function TariffsScreen({
 
   const todayStr = getAltaiTodayStr();
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isAdmin) {
       setEditError('Корректировка тарифов разрешена только роли Администратора.');
@@ -53,31 +53,80 @@ export default function TariffsScreen({
     setIsUpdating(true);
     setEditError(null);
 
-    apiFetch('/api/tariff/update', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        category: selectedCategory,
-        startDate,
-        endDate,
-        weekdaysOnly: mode === 'weekdays',
-        friSatOnly: mode === 'weekends',
-        action,
-        value: amount
-      })
-    })
-      .then(res => res.json())
-      .then(data => {
-        if (data.error) throw new Error(data.error);
-        onRefreshAll();
-        onShowSuccessToast(`Тарифы скорректированы! Изменено дат: ${data.updatedCount} шт.`);
-      })
-      .catch(err => {
-        setEditError(err.message || 'Ошибка обновления тарифов');
-      })
-      .finally(() => {
-        setIsUpdating(false);
+    try {
+      const { ref, get, set } = await import('firebase/database');
+      const { expandPeriodToDays } = await import('../lib/clientDbEngine');
+
+      const snap = await get(ref(rtdb, 'properties/terra_altaya'));
+      const db = snap.exists() ? snap.val() : {};
+
+      if (!db.tariffs) {
+        db.tariffs = {};
+      }
+      if (!db.tariffs[selectedCategory]) {
+        db.tariffs[selectedCategory] = {};
+      }
+      if (!db.correctionLog) {
+        db.correctionLog = [];
+      }
+
+      const datesStr = expandPeriodToDays(startDate, endDate);
+      let updatedCount = 0;
+
+      datesStr.forEach((day: string) => {
+        if (day < todayStr) return;
+
+        const dateObj = new Date(day);
+        const dayOfWeek = dateObj.getDay(); // 0 is Sunday, 5 is Friday, 6 is Saturday
+
+        if (mode === 'weekends' && dayOfWeek !== 5 && dayOfWeek !== 6) return;
+        if (mode === 'weekdays' && (dayOfWeek === 5 || dayOfWeek === 6)) return;
+
+        let currentPrice = 0;
+        if (db.tariffs[selectedCategory][day] !== undefined) {
+          currentPrice = db.tariffs[selectedCategory][day];
+        } else {
+          const standardPriceRecord = (db.priceData || []).find((p: any) => p.category === selectedCategory && p.date === day);
+          currentPrice = standardPriceRecord ? standardPriceRecord.price : 0;
+        }
+
+        let nextPrice = currentPrice;
+        const parsedValue = parseFloat(amount as any);
+
+        if (action === 'set') {
+          nextPrice = parsedValue;
+        } else if (action === 'increase') {
+          nextPrice = currentPrice + parsedValue;
+        } else if (action === 'decrease') {
+          nextPrice = Math.max(0, currentPrice - parsedValue);
+        }
+
+        db.tariffs[selectedCategory][day] = nextPrice;
+
+        db.correctionLog.push({
+          id: 'corr_' + Math.random().toString(36).substr(2, 9),
+          date: day,
+          entityType: 'price',
+          entityId: selectedCategory,
+          fieldName: 'price',
+          oldValue: currentPrice,
+          newValue: nextPrice,
+          sourceFile: 'Ручная корректировка тарифа',
+          user: 'Администратор (pm.michelle)',
+          changedAt: new Date().toISOString()
+        });
+
+        updatedCount++;
       });
+
+      await set(ref(rtdb, 'properties/terra_altaya'), db);
+      onRefreshAll();
+      onShowSuccessToast(`Тарифы скорректированы! Изменено дат: ${updatedCount} шт.`);
+    } catch (err: any) {
+      setEditError(err.message || 'Ошибка обновления тарифов');
+    } finally {
+      setIsUpdating(false);
+    }
   };
 
   return (

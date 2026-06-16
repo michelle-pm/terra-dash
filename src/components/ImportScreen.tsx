@@ -31,6 +31,16 @@ export default function ImportScreen({
     parsedPrices?: PriceData[];
   } | null>(null);
 
+  const [diagnostics, setDiagnostics] = useState<{
+    firebasePath: string;
+    revenueCount: number;
+    priceCount: number;
+    bookingsCount: number;
+    importsCount: number;
+    latestFileName: string;
+    latestStatus: string;
+  } | null>(null);
+
   // API health simulated mock data showing CPU client browser engine status
   const apiHealth = {
     online: true,
@@ -219,9 +229,22 @@ export default function ImportScreen({
       const snap = await get(ref(rtdb, 'properties/terra_altaya'));
       const db = snap.exists() ? snap.val() : {};
 
-      if (!db.imports) db.imports = [];
+      if (!db.imports) db.imports = {};
       if (!db.revenueData) db.revenueData = [];
       if (!db.priceData) db.priceData = [];
+      if (!db.bookings) db.bookings = [];
+
+      // Ensure imports is an object or array to avoid breaking
+      let importsMap: any = {};
+      if (db.imports) {
+        if (Array.isArray(db.imports)) {
+          db.imports.forEach((imp: any) => {
+            if (imp && imp.id) importsMap[imp.id] = imp;
+          });
+        } else if (typeof db.imports === 'object') {
+          importsMap = { ...db.imports };
+        }
+      }
 
       // Create confirmed importRun
       const importRun = {
@@ -230,20 +253,65 @@ export default function ImportScreen({
         uploadedAt: new Date().toISOString()
       };
 
-      // Set clean lists
-      db.imports = [...db.imports.filter((imp: any) => imp.id !== importId), importRun];
-
       if (parsedDataToConfirm.fileType === 'yearly_revenue_report' && parsedDataToConfirm.parsedRevenue) {
         db.revenueData = parsedDataToConfirm.parsedRevenue;
       } else if (parsedDataToConfirm.fileType === 'price_list' && parsedDataToConfirm.parsedPrices) {
         db.priceData = parsedDataToConfirm.parsedPrices;
       }
 
+      importsMap[importId] = importRun;
+      db.imports = importsMap;
+
       // Mark demo data off
       db.hasDemoData = false;
 
       // Write direct replacement to database!
-      await set(ref(rtdb, 'properties/terra_altaya'), db);
+      const path = 'properties/terra_altaya';
+      await set(ref(rtdb, path), db);
+
+      // IMMEDIATE READBACK VERIFICATION
+      const readbackSnap = await get(ref(rtdb, path));
+      if (!readbackSnap.exists()) {
+        throw new Error('Импорт записан некорректно: данные не найдены после сохранения.');
+      }
+
+      const verifiedDb = readbackSnap.val();
+      const vRevenue = verifiedDb.revenueData || [];
+      const vPrices = verifiedDb.priceData || [];
+      const vBookings = verifiedDb.bookings || [];
+
+      let vImportsArray: any[] = [];
+      if (verifiedDb.imports) {
+        if (Array.isArray(verifiedDb.imports)) {
+          vImportsArray = verifiedDb.imports;
+        } else if (typeof verifiedDb.imports === 'object') {
+          vImportsArray = Object.values(verifiedDb.imports);
+        }
+      }
+
+      const confirmedImportFound = vImportsArray.find((imp: any) => imp.id === importId && imp.status === 'confirmed');
+      if (!confirmedImportFound) {
+        throw new Error('Импорт записан некорректно: данные не найдены после сохранения.');
+      }
+
+      if (parsedDataToConfirm.fileType === 'yearly_revenue_report' && vRevenue.length === 0) {
+        throw new Error('Импорт записан некорректно: данные не найдены после сохранения.');
+      }
+
+      if (parsedDataToConfirm.fileType === 'price_list' && vPrices.length === 0) {
+        throw new Error('Импорт записан некорректно: данные не найдены после сохранения.');
+      }
+
+      // Set diagnostics!
+      setDiagnostics({
+        firebasePath: `properties/terra_altaya`,
+        revenueCount: vRevenue.length,
+        priceCount: vPrices.length,
+        bookingsCount: vBookings.length,
+        importsCount: vImportsArray.length,
+        latestFileName: importRun.fileName,
+        latestStatus: importRun.status
+      });
 
       setPendingPreview(null);
       setParsedDataToConfirm(null);
@@ -315,6 +383,55 @@ export default function ImportScreen({
         <h2 className="text-lg font-bold text-white">Импорт отчетов Bnovo и Прайс-листов</h2>
         <p className="text-xs text-[#A1A1AA] mt-0.5 font-normal">Принимайте годовую финансовую отчетность и координируйте сезонные сетки проживания курорта Терра Алтай.</p>
       </div>
+
+      {/* POST-IMPORT READBACK DIAGNOSTICS */}
+      {diagnostics && (
+        <div className="p-5 rounded-2xl border border-[#00E09D]/30 bg-[#00E09D]/5 space-y-3 animate-fade-in text-sans">
+          <div className="flex items-center gap-2 text-[#00E09D] font-bold text-sm">
+            <CheckCircle2 className="h-5 w-5" />
+            <span>Результаты верификации записи в Realtime Database</span>
+          </div>
+          
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono pt-1 text-zinc-300">
+            <div className="p-2.5 bg-black/40 border border-white/5 rounded-xl">
+              <span className="text-zinc-500 uppercase text-[9px] font-bold block">Путь записи</span>
+              <span className="font-bold text-emerald-400 mt-1 block truncate" title={diagnostics.firebasePath}>
+                {diagnostics.firebasePath}
+              </span>
+            </div>
+            <div className="p-2.5 bg-black/40 border border-white/5 rounded-xl">
+              <span className="text-zinc-500 uppercase text-[9px] font-bold block">Записей Bnovo (Revenue)</span>
+              <span className="font-bold mt-1 block">{diagnostics.revenueCount} шт</span>
+            </div>
+            <div className="p-2.5 bg-black/40 border border-white/5 rounded-xl">
+              <span className="text-zinc-500 uppercase text-[9px] font-bold block">Записей цен (Price)</span>
+              <span className="font-bold mt-1 block">{diagnostics.priceCount} шт</span>
+            </div>
+            <div className="p-2.5 bg-black/40 border border-white/5 rounded-xl">
+              <span className="text-zinc-500 uppercase text-[9px] font-bold block">Записей броней</span>
+              <span className="font-bold mt-1 block">{diagnostics.bookingsCount} шт</span>
+            </div>
+          </div>
+
+          <div className="pt-2 border-t border-white/5 flex flex-wrap justify-between items-center text-xs text-zinc-400">
+            <div>
+              Последний файл: <span className="font-mono text-zinc-100">{diagnostics.latestFileName}</span>
+            </div>
+            <div>
+              Статус: <span className="font-mono font-bold text-[#00E09D]">{diagnostics.latestStatus}</span>
+            </div>
+          </div>
+          
+          <div className="flex justify-end pt-1">
+            <button
+              onClick={() => setDiagnostics(null)}
+              className="text-[11px] text-zinc-400 hover:text-zinc-200 underline cursor-pointer"
+            >
+              Скрыть диагностику
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         

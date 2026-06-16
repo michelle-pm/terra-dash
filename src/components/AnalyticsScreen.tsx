@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar, Line } from 'recharts';
 import { BarChart3, Filter, Calendar, Settings, DollarSign, DownloadCloud } from 'lucide-react';
-import { apiFetch } from '../lib/api';
+import { compileAnalyticsMetrics } from '../lib/clientDbEngine';
 
 interface CategoryItem {
   category: string;
@@ -23,9 +23,10 @@ interface TimelineItem {
 
 interface AnalyticsScreenProps {
   categoriesList: string[];
+  dbState: any;
 }
 
-export default function AnalyticsScreen({ categoriesList }: AnalyticsScreenProps) {
+export default function AnalyticsScreen({ categoriesList, dbState }: AnalyticsScreenProps) {
   // Filters State
   const [period, setPeriod] = useState<'day' | 'week' | 'month' | 'quarter' | 'year'>('month');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
@@ -38,35 +39,25 @@ export default function AnalyticsScreen({ categoriesList }: AnalyticsScreenProps
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Load analytical summaries from API
+  // Load analytical summaries client-side
   useEffect(() => {
     setIsLoading(true);
     setErrorMsg(null);
 
-    const query = new URLSearchParams({
-      start: startDate,
-      end: endDate,
-      category: categoryFilter,
-      period
-    });
-
-    apiFetch(`/api/analytics-metrics?${query.toString()}`)
-      .then(res => {
-        if (!res.ok) throw new Error('Ошибка связи с сервером');
-        return res.json();
-      })
-      .then(data => {
-        setTimelineData(data.timeline);
-        setCategorySummary(data.categories);
-      })
-      .catch(err => {
-        setErrorMsg('Не удалось загрузить аналитические выборки.');
-        console.error(err);
-      })
-      .finally(() => {
-        setIsLoading(false);
-      });
-  }, [period, categoryFilter, startDate, endDate]);
+    try {
+      if (!dbState) {
+        throw new Error('База данных пуста');
+      }
+      const data = compileAnalyticsMetrics(dbState, startDate, endDate, categoryFilter, period);
+      setTimelineData(data.timeline);
+      setCategorySummary(data.categories);
+    } catch (err: any) {
+      setErrorMsg('Не удалось загрузить аналитические выборки.');
+      console.error(err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [period, categoryFilter, startDate, endDate, dbState]);
 
   const formatCurrency = (val: number) => {
     return new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(val);

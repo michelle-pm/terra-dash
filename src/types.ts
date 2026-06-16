@@ -55,3 +55,21 @@ export interface TariffUpdate {
   date: string; // YYYY-MM-DD
   price: number;
 }
+
+export interface Booking {
+  code: string;
+  source: string;
+  group?: string;
+  bookingDate: string; // YYYY-MM-DD
+  cancelDate: string | null; // YYYY-MM-DD or null
+  checkIn: string; // YYYY-MM-DD
+  checkOut: string; // YYYY-MM-DD
+  category: string;
+  roomNum: string;
+  guest: string;
+  adults: number;
+  children: number;
+  balance: number;
+  total: number;
+  manager?: string;
+}
